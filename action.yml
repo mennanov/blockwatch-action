@@ -1,5 +1,5 @@
-name: 'blockwatch linter'
-description: 'Runs the blockwatch linter to analyze diffs'
+name: 'blockwatch'
+description: 'Runs the blockwatch linter to analyze dependent blocks of code'
 
 runs:
   using: 'composite'
