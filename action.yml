@@ -1,4 +1,4 @@
-name: 'Blockwatch linter'
+name: 'Dependent blocks linter'
 description: 'Runs the blockwatch linter to analyze dependent blocks of code'
 
 runs:
