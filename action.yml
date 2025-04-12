@@ -14,7 +14,26 @@ runs:
         cargo install blockwatch
       shell: bash
 
-    - name: Run blockwatch
+    - name: Run blockwatch on diff
+      id: diff # Optional: Give the step an ID if you need its output later
       run: |
-        git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          # For Pull Requests: Compare the target branch base with the PR head commit
+          git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch
+
+        elif [[ "${{ github.event_name }}" == "push" ]]; then
+          # For Pushes: Compare the commit before the push with the current/after commit
+          BEFORE_SHA="${{ github.event.before }}"
+          CURRENT_SHA="${{ github.sha }}" # same as github.event.after for push events
+
+          # Handle the initial push to a new branch where BEFORE_SHA is 0000...
+          if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            git show --patch $CURRENT_SHA | blockwatch
+          else
+            git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch
+          fi
+
+        else
+          echo "Warning: Unsupported event type '${{ github.event_name }}'. Skipping diff."
+        fi
       shell: bash
