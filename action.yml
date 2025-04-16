@@ -1,6 +1,12 @@
 name: 'Dependent blocks linter'
 description: 'Runs the blockwatch linter to analyze dependent blocks of code'
 
+inputs:
+  extensions:
+    description: 'Extensions to pass to blockwatch in the format "key1=value1,key2=value2"'
+    required: false
+    default: ''
+
 runs:
   using: 'composite'
   steps:
@@ -17,9 +23,19 @@ runs:
     - name: Run blockwatch on diff
       id: diff # Optional: Give the step an ID if you need its output later
       run: |
+        # Process extensions if provided
+        EXTENSIONS=""
+        if [[ -n "${{ inputs.extensions }}" ]]; then
+          # Split by comma and create -E arguments
+          IFS=',' read -ra EXT_PAIRS <<< "${{ inputs.extensions }}"
+          for pair in "${EXT_PAIRS[@]}"; do
+            EXTENSIONS="$EXTENSIONS -E $pair"
+          done
+        fi
+
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
           # For Pull Requests: Compare the target branch base with the PR head commit
-          git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch
+          git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch $EXTENSIONS
 
         elif [[ "${{ github.event_name }}" == "push" ]]; then
           # For Pushes: Compare the commit before the push with the current/after commit
@@ -28,9 +44,9 @@ runs:
 
           # Handle the initial push to a new branch where BEFORE_SHA is 0000...
           if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
-            git show --patch $CURRENT_SHA | blockwatch
+            git show --patch $CURRENT_SHA | blockwatch $EXTENSIONS
           else
-            git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch
+            git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch $EXTENSIONS
           fi
 
         else
