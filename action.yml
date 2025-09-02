@@ -6,6 +6,10 @@ inputs:
     description: 'Extensions to pass to blockwatch in the format "key1=value1,key2=value2"'
     required: false
     default: ''
+  diff_pathspec:
+    description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces)"
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -33,9 +37,17 @@ runs:
           done
         fi
 
+        # Prepare optional diff pathspec/args from input
+        DIFF_PATHSPEC="${{ inputs.diff_pathspec }}"
+
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
           # For Pull Requests: Compare the target branch base with the PR head commit
-          git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch $EXTENSIONS
+          # Use -- to separate revisions from pathspecs if provided
+          if [[ -n "$DIFF_PATHSPEC" ]]; then
+            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch $EXTENSIONS
+          else
+            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch $EXTENSIONS
+          fi
 
         elif [[ "${{ github.event_name }}" == "push" ]]; then
           # For Pushes: Compare the commit before the push with the current/after commit
@@ -44,9 +56,18 @@ runs:
 
           # Handle the initial push to a new branch where BEFORE_SHA is 0000...
           if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
-            git show --patch $CURRENT_SHA | blockwatch $EXTENSIONS
+            # Use git diff --root so that pathspecs can be applied as well
+            if [[ -n "$DIFF_PATHSPEC" ]]; then
+              git diff --patch --root $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch $EXTENSIONS
+            else
+              git diff --patch --root $CURRENT_SHA | blockwatch $EXTENSIONS
+            fi
           else
-            git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch $EXTENSIONS
+            if [[ -n "$DIFF_PATHSPEC" ]]; then
+              git diff --patch $BEFORE_SHA...$CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch $EXTENSIONS
+            else
+              git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch $EXTENSIONS
+            fi
           fi
 
         else
