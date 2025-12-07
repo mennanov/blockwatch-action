@@ -1,0 +1,49 @@
+name: Local Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-action:
+    runs-on: ubuntu-latest
+    name: Test Action
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Blockwatch Action
+        uses: ./
+        with:
+          # Test various inputs to ensure argument parsing works correctly
+          extensions: "rs=cpp"
+          enable: "keep-sorted"
+          ignore: "target/**"
+          globs: "**/*.md"
+          
+      - name: Run Blockwatch Action (No Args)
+        uses: ./
+
+      - name: Run Blockwatch Action (Enable Args)
+        uses: ./
+        with:
+          extensions: |
+            rs=cpp
+            txt=md
+          enable: "keep-sorted,keep-unique"
+          ignore: "target/**,dist/**"
+          globs: "**/*.md,**/*.yml"
+
+      - name: Run Blockwatch Action (Disable Args)
+        uses: ./
+        with:
+          disable: |
+            check-ai
+            line-count
+          globs: "**/*.md"

@@ -6,6 +6,22 @@ inputs:
     description: 'Extensions to pass to blockwatch in the format "key1=value1,key2=value2"'
     required: false
     default: ''
+  enable:
+    description: 'Validators to enable (comma separated)'
+    required: false
+    default: ''
+  disable:
+    description: 'Validators to disable (comma separated)'
+    required: false
+    default: ''
+  ignore:
+    description: 'Glob patterns for files to ignore (comma separated)'
+    required: false
+    default: ''
+  globs:
+    description: 'Glob patterns for files to check (comma separated)'
+    required: false
+    default: ''
   diff_pathspec:
     description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces)"
     required: false
@@ -25,17 +41,39 @@ runs:
       shell: bash
 
     - name: Run blockwatch on diff
-      id: diff # Optional: Give the step an ID if you need its output later
+      id: diff
       run: |
-        # Process extensions if provided
-        EXTENSIONS=""
-        if [[ -n "${{ inputs.extensions }}" ]]; then
-          # Split by comma and create -E arguments
-          IFS=',' read -ra EXT_PAIRS <<< "${{ inputs.extensions }}"
-          for pair in "${EXT_PAIRS[@]}"; do
-            EXTENSIONS="$EXTENSIONS -E $pair"
-          done
-        fi
+        # Process inputs
+        # Use an array to store arguments to handle spaces within arguments correctly
+        BLOCKWATCH_ARGS=()
+
+        # Helper function to add arguments
+        add_args() {
+          local flag="$1"
+          local input="$2"
+          if [[ -n "$input" ]]; then
+            # Replace newlines with commas to handle multiline inputs
+            local clean_input="${input//$'\n'/,}"
+            IFS=',' read -ra ITEMS <<< "$clean_input"
+            for item in "${ITEMS[@]}"; do
+              # Trim leading/trailing whitespace
+              item="$(echo "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              if [[ -n "$item" ]]; then
+                if [[ -n "$flag" ]]; then
+                  BLOCKWATCH_ARGS+=("$flag" "$item")
+                else
+                  BLOCKWATCH_ARGS+=("$item")
+                fi
+              fi
+            done
+          fi
+        }
+
+        add_args "-E" "${{ inputs.extensions }}"
+        add_args "-e" "${{ inputs.enable }}"
+        add_args "-d" "${{ inputs.disable }}"
+        add_args "--ignore" "${{ inputs.ignore }}"
+        add_args "" "${{ inputs.globs }}"
 
         # Prepare optional diff pathspec/args from input
         DIFF_PATHSPEC="${{ inputs.diff_pathspec }}"
@@ -44,9 +82,10 @@ runs:
           # For Pull Requests: Compare the target branch base with the PR head commit
           # Use -- to separate revisions from pathspecs if provided
           if [[ -n "$DIFF_PATHSPEC" ]]; then
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch $EXTENSIONS
+            # shellcheck disable=SC2086
+            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
           else
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch $EXTENSIONS
+            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch "${BLOCKWATCH_ARGS[@]}"
           fi
 
         elif [[ "${{ github.event_name }}" == "push" ]]; then
@@ -58,15 +97,17 @@ runs:
           if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             # Use git diff --root so that pathspecs can be applied as well
             if [[ -n "$DIFF_PATHSPEC" ]]; then
-              git diff --patch --root $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch $EXTENSIONS
+              # shellcheck disable=SC2086
+              git diff --patch --root $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
             else
-              git diff --patch --root $CURRENT_SHA | blockwatch $EXTENSIONS
+              git diff --patch --root $CURRENT_SHA | blockwatch "${BLOCKWATCH_ARGS[@]}"
             fi
           else
             if [[ -n "$DIFF_PATHSPEC" ]]; then
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch $EXTENSIONS
+              # shellcheck disable=SC2086
+              git diff --patch $BEFORE_SHA...$CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
             else
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch $EXTENSIONS
+              git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch "${BLOCKWATCH_ARGS[@]}"
             fi
           fi
 
