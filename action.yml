@@ -35,9 +35,30 @@ runs:
       with:
         fetch-depth: 0  # ensures that git diff is available for previous commits
 
-    - name: Install blockwatch
+    - name: Get latest blockwatch version
+      id: blockwatch-version
       run: |
-        cargo install blockwatch
+        VERSION=$(cargo search blockwatch --limit 1 | head -n 1 | awk '/^blockwatch =/ {print $3}' | tr -d '"')
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      shell: bash
+
+    - name: Cache blockwatch binary
+      id: cache-blockwatch
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/blockwatch
+          ~/.cargo/bin/blockwatch.exe
+        key: ${{ runner.os }}-blockwatch-${{ steps.blockwatch-version.outputs.version }}
+
+    - name: Install cargo-binstall
+      if: steps.cache-blockwatch.outputs.cache-hit != 'true'
+      uses: cargo-bins/cargo-binstall@main
+
+    - name: Install blockwatch
+      if: steps.cache-blockwatch.outputs.cache-hit != 'true'
+      run: |
+        cargo binstall --no-confirm blockwatch@${{ steps.blockwatch-version.outputs.version }}
       shell: bash
 
     - name: Run blockwatch on diff
