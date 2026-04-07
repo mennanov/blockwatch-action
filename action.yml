@@ -37,15 +37,28 @@ runs:
 
     - name: Get latest blockwatch version
       id: blockwatch-version
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
-        # Use curl to crates.io API which is much faster and completely reliable
-        # Disable pipefail to prevent grep/head SIGPIPE crashes in some environments
-        set +o pipefail
-        VERSION=$(curl -s "https://crates.io/api/v1/crates/blockwatch" | grep -o '"max_version":"[^"]*"' | head -n 1 | cut -d '"' -f 4 || true)
+        # Try GitHub releases API first: GitHub Actions always has authenticated access to GitHub
+        # and this avoids crates.io rate-limiting GitHub Actions cloud IPs.
+        VERSION=$(curl -s -H "Authorization: Bearer ${GH_TOKEN}" \
+          "https://api.github.com/repos/mennanov/blockwatch/releases/latest" | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('tag_name',''); print(v.lstrip('v'))" \
+          2>/dev/null || true)
+
         if [[ -z "$VERSION" ]]; then
-          echo "Warning: Could not fetch version from crates.io. Caching might not work correctly."
-          # Fallback to a generic cache key so it still functions
-          echo "version=latest" >> "$GITHUB_OUTPUT"
+          # Fall back to crates.io API (disable pipefail to prevent SIGPIPE from grep/head)
+          set +o pipefail
+          VERSION=$(curl -s -A "blockwatch-action (https://github.com/mennanov/blockwatch-action)" \
+            "https://crates.io/api/v1/crates/blockwatch" | \
+            grep -o '"max_version":"[^"]*"' | head -n 1 | cut -d '"' -f 4 || true)
+        fi
+
+        if [[ -z "$VERSION" ]]; then
+          # Last resort: weekly date key so the cache still refreshes and installs the latest
+          echo "Warning: Could not fetch blockwatch version. Using weekly cache key."
+          echo "version=weekly-$(date +'%Y-W%V')" >> "$GITHUB_OUTPUT"
         else
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         fi
@@ -68,7 +81,7 @@ runs:
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
       run: |
         VERSION="${{ steps.blockwatch-version.outputs.version }}"
-        if [[ "$VERSION" == "latest" ]]; then
+        if [[ "$VERSION" == weekly-* ]]; then
           cargo binstall --no-confirm blockwatch
         else
           cargo binstall --no-confirm "blockwatch@${VERSION}"
