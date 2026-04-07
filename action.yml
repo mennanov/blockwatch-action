@@ -38,8 +38,17 @@ runs:
     - name: Get latest blockwatch version
       id: blockwatch-version
       run: |
-        VERSION=$(cargo search blockwatch --limit 1 | head -n 1 | awk '/^blockwatch =/ {print $3}' | tr -d '"')
-        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        # Use curl to crates.io API which is much faster and completely reliable
+        # Disable pipefail to prevent grep/head SIGPIPE crashes in some environments
+        set +o pipefail
+        VERSION=$(curl -s "https://crates.io/api/v1/crates/blockwatch" | grep -o '"max_version":"[^"]*"' | head -n 1 | cut -d '"' -f 4 || true)
+        if [[ -z "$VERSION" ]]; then
+          echo "Warning: Could not fetch version from crates.io. Caching might not work correctly."
+          # Fallback to a generic cache key so it still functions
+          echo "version=latest" >> "$GITHUB_OUTPUT"
+        else
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        fi
       shell: bash
 
     - name: Cache blockwatch binary
@@ -58,7 +67,12 @@ runs:
     - name: Install blockwatch
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
       run: |
-        cargo binstall --no-confirm blockwatch@${{ steps.blockwatch-version.outputs.version }}
+        VERSION="${{ steps.blockwatch-version.outputs.version }}"
+        if [[ "$VERSION" == "latest" ]]; then
+          cargo binstall --no-confirm blockwatch
+        else
+          cargo binstall --no-confirm "blockwatch@${VERSION}"
+        fi
       shell: bash
 
     - name: Run blockwatch on diff
