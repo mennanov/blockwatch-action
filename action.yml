@@ -31,7 +31,7 @@ runs:
   using: 'composite'
   steps:
     - name: Checkout repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0  # ensures that git diff is available for previous commits
 
@@ -66,7 +66,7 @@ runs:
 
     - name: Cache blockwatch binary
       id: cache-blockwatch
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/bin/blockwatch
