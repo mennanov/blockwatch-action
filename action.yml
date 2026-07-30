@@ -54,33 +54,10 @@ runs:
         echo "$CARGO_BIN" >> "$GITHUB_PATH"
       shell: bash
 
-    - name: Get latest blockwatch version
+    - name: Set blockwatch version
       id: blockwatch-version
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        # Try GitHub releases API first: GitHub Actions always has authenticated access to GitHub
-        # and this avoids crates.io rate-limiting GitHub Actions cloud IPs.
-        VERSION=$(curl -s -H "Authorization: Bearer ${GH_TOKEN}" \
-          "https://api.github.com/repos/mennanov/blockwatch/releases/latest" | \
-          python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('tag_name',''); print(v.lstrip('v'))" \
-          2>/dev/null || true)
-
-        if [[ -z "$VERSION" ]]; then
-          # Fall back to crates.io API (disable pipefail to prevent SIGPIPE from grep/head)
-          set +o pipefail
-          VERSION=$(curl -s -A "blockwatch-action (https://github.com/mennanov/blockwatch-action)" \
-            "https://crates.io/api/v1/crates/blockwatch" | \
-            grep -o '"max_version":"[^"]*"' | head -n 1 | cut -d '"' -f 4 || true)
-        fi
-
-        if [[ -z "$VERSION" ]]; then
-          # Last resort: weekly date key so the cache still refreshes and installs the latest
-          echo "Warning: Could not fetch blockwatch version. Using weekly cache key."
-          echo "version=weekly-$(date +'%Y-W%V')" >> "$GITHUB_OUTPUT"
-        else
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-        fi
+      # Single source of truth for the pinned version — bump only this line.
+      run: echo "version=0.3.9" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
@@ -101,17 +78,12 @@ runs:
     - name: Install blockwatch
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
       run: |
-        VERSION="${{ steps.blockwatch-version.outputs.version }}"
         # `cargo-binstall`, not `cargo binstall`: the step above installs binstall but
         # not Rust, so `cargo` itself may be missing on a self-hosted runner.
         # --disable-strategies compile: without a Rust toolchain on the runner, a
         # silent fallback to `cargo install` would just fail with a confusing
         # "cargo: command not found" instead of a clear "no binary available".
-        if [[ "$VERSION" == weekly-* ]]; then
-          cargo-binstall --no-confirm --disable-strategies compile blockwatch
-        else
-          cargo-binstall --no-confirm --disable-strategies compile "blockwatch@${VERSION}"
-        fi
+        cargo-binstall --no-confirm --disable-strategies compile "blockwatch@${{ steps.blockwatch-version.outputs.version }}"
       shell: bash
 
     - name: Run blockwatch on diff
