@@ -35,6 +35,25 @@ runs:
       with:
         fetch-depth: 0  # ensures that git diff is available for previous commits
 
+    - name: Resolve cargo bin directory
+      id: cargo-bin
+      run: |
+        # Don't hardcode ~/.cargo: some images (e.g. the official `rust` one) point
+        # CARGO_HOME elsewhere, and then the cache below looks in the wrong place.
+        # This must be writable — we don't fall back if it isn't, since a fallback
+        # here would silently disagree with where cargo-binstall itself installs.
+        CARGO_BIN="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
+        # actions/cache wants a real Windows path, and C:/Users/... is safer inside a
+        # glob than the backslash form. No cygpath (rare) just means we leave it alone.
+        if [[ "$RUNNER_OS" == "Windows" ]] && command -v cygpath >/dev/null; then
+          CARGO_BIN="$(cygpath -m "$CARGO_BIN")"
+        fi
+        echo "dir=$CARGO_BIN" >> "$GITHUB_OUTPUT"
+        # Add to PATH even on a cache hit, when the install steps below are skipped:
+        # runners without Rust preinstalled don't already have this directory on PATH.
+        echo "$CARGO_BIN" >> "$GITHUB_PATH"
+      shell: bash
+
     - name: Get latest blockwatch version
       id: blockwatch-version
       env:
@@ -69,22 +88,29 @@ runs:
       uses: actions/cache@v6
       with:
         path: |
-          ~/.cargo/bin/blockwatch
-          ~/.cargo/bin/blockwatch.exe
-        key: ${{ runner.os }}-blockwatch-${{ steps.blockwatch-version.outputs.version }}
+          ${{ steps.cargo-bin.outputs.dir }}/blockwatch
+          ${{ steps.cargo-bin.outputs.dir }}/blockwatch.exe
+        # runner.arch is in the key because one cache is shared by all of a repo's
+        # runners: without it an arm64 runner could restore an x86_64 binary.
+        key: ${{ runner.os }}-${{ runner.arch }}-blockwatch-${{ steps.blockwatch-version.outputs.version }}
 
     - name: Install cargo-binstall
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
-      uses: cargo-bins/cargo-binstall@main
+      uses: cargo-bins/cargo-binstall@v1.21.1
 
     - name: Install blockwatch
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
       run: |
         VERSION="${{ steps.blockwatch-version.outputs.version }}"
+        # `cargo-binstall`, not `cargo binstall`: the step above installs binstall but
+        # not Rust, so `cargo` itself may be missing on a self-hosted runner.
+        # --disable-strategies compile: without a Rust toolchain on the runner, a
+        # silent fallback to `cargo install` would just fail with a confusing
+        # "cargo: command not found" instead of a clear "no binary available".
         if [[ "$VERSION" == weekly-* ]]; then
-          cargo binstall --no-confirm blockwatch
+          cargo-binstall --no-confirm --disable-strategies compile blockwatch
         else
-          cargo binstall --no-confirm "blockwatch@${VERSION}"
+          cargo-binstall --no-confirm --disable-strategies compile "blockwatch@${VERSION}"
         fi
       shell: bash
 
