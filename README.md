@@ -41,7 +41,7 @@ jobs:
 
 Works out of the box on GitHub-hosted runners. A **self-hosted** runner needs a few things in place:
 
-- **Actions Runner 2.327.1 or newer** — `actions/checkout@v6` and `actions/cache@v5` run on Node 24, which requires it.
+- **Actions Runner 2.327.1 or newer** — `actions/checkout@v7` and `actions/cache@v6` run on Node 24, which requires it.
 - **glibc 2.28 or newer** — also a Node 24 requirement. Rules out CentOS 7, Ubuntu 18.04, and musl-based images like Alpine.
 - **git 2.18 or newer** — older versions make `actions/checkout` silently fall back to downloading a tarball with no `.git` directory, which breaks the `git diff` this action depends on.
 - **bash** — every step runs with `shell: bash`; on Windows that means Git Bash needs to be on `PATH`.

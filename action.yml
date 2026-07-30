@@ -74,6 +74,13 @@ runs:
     - name: Install cargo-binstall
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
       uses: cargo-bins/cargo-binstall@v1.21.1
+      with:
+        # Without this the action source is pinned but the executable it downloads
+        # comes from releases/latest, so a new cargo-binstall release reaches every
+        # consumer of @v1 with no change here — and only on a cache miss, making the
+        # breakage intermittent. Dependabot bumps the `uses:` ref above but not this
+        # input, so keep the two in sync by hand when the grouped PR lands.
+        version: 'v1.21.1'
 
     - name: Install blockwatch
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
