@@ -33,30 +33,45 @@ runs:
     - name: Checkout repository
       uses: actions/checkout@v7
       with:
-        fetch-depth: 0  # ensures that git diff is available for previous commits
+        # The diff commands below name revisions that predate the checkout (a PR
+        # base, the tip before a push). A default depth-1 clone contains none of
+        # them, and the diff fails to resolve.
+        fetch-depth: 0
 
     - name: Resolve cargo bin directory
       id: cargo-bin
       run: |
-        # Don't hardcode ~/.cargo: some images (e.g. the official `rust` one) point
-        # CARGO_HOME elsewhere, and then the cache below looks in the wrong place.
-        # This must be writable — we don't fall back if it isn't, since a fallback
-        # here would silently disagree with where cargo-binstall itself installs.
+        # cargo installs into $CARGO_INSTALL_ROOT/bin, falling back to
+        # $CARGO_HOME/bin and then ~/.cargo/bin. That precedence is mirrored here
+        # rather than assumed: images that relocate CARGO_HOME (the official
+        # `rust` image among them) would otherwise have the cache save and
+        # restore a path the binary never occupies, quietly missing every time.
+        #
+        # The resolved directory has to be writable, and no fallback is offered
+        # if it isn't. A fallback would change only this step's idea of the path,
+        # not where cargo-binstall actually writes, replacing a clear install
+        # failure with a cache that disagrees with reality.
         CARGO_BIN="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
-        # actions/cache wants a real Windows path, and C:/Users/... is safer inside a
-        # glob than the backslash form. No cygpath (rare) just means we leave it alone.
+        # actions/cache expands its `path` entries as globs, where a backslash is
+        # an escape character — so a Windows path needs the forward-slash form
+        # (C:/Users/...) to survive. Runners without cygpath already report the
+        # path in a usable shape, so leaving it untouched is the right fallback.
         if [[ "$RUNNER_OS" == "Windows" ]] && command -v cygpath >/dev/null; then
           CARGO_BIN="$(cygpath -m "$CARGO_BIN")"
         fi
         echo "dir=$CARGO_BIN" >> "$GITHUB_OUTPUT"
-        # Add to PATH even on a cache hit, when the install steps below are skipped:
-        # runners without Rust preinstalled don't already have this directory on PATH.
+        # PATH is set unconditionally, including on a cache hit that skips both
+        # install steps. A runner with no preinstalled Rust has never seen this
+        # directory, so a restored binary would otherwise be unreachable.
         echo "$CARGO_BIN" >> "$GITHUB_PATH"
       shell: bash
 
     - name: Set blockwatch version
       id: blockwatch-version
-      # Single source of truth for the pinned version — bump only this line.
+      # The pinned version exists only here. Both the cache key and the install
+      # command read this output instead of repeating the literal, so upgrading
+      # blockwatch is a one-line edit that cannot leave the two disagreeing —
+      # a stale key would serve the old binary under the new version's name.
       run: echo "version=0.3.9" >> "$GITHUB_OUTPUT"
       shell: bash
 
@@ -67,49 +82,64 @@ runs:
         path: |
           ${{ steps.cargo-bin.outputs.dir }}/blockwatch
           ${{ steps.cargo-bin.outputs.dir }}/blockwatch.exe
-        # runner.arch is in the key because one cache is shared by all of a repo's
-        # runners: without it an arm64 runner could restore an x86_64 binary.
+        # One cache is shared by every runner in a repository, so the key has to
+        # name the platform. Without runner.arch, a repository with a mixed fleet
+        # lets an arm64 runner restore the x86_64 binary another one saved.
         key: ${{ runner.os }}-${{ runner.arch }}-blockwatch-${{ steps.blockwatch-version.outputs.version }}
 
     - name: Install cargo-binstall
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
       uses: cargo-bins/cargo-binstall@v1.21.1
       with:
-        # Without this the action source is pinned but the executable it downloads
-        # comes from releases/latest, so a new cargo-binstall release reaches every
-        # consumer of @v1 with no change here — and only on a cache miss, making the
-        # breakage intermittent. Dependabot bumps the `uses:` ref above but not this
-        # input, so keep the two in sync by hand when the grouped PR lands.
+        # Two independent pins are required. The `uses:` ref above fixes the
+        # action and the install script it runs; this input fixes the executable
+        # that script downloads. Omitting it is not a looser pin but a different
+        # one — the script then pulls from releases/latest, so any new
+        # cargo-binstall release reaches every consumer of this action, and only
+        # on a cache miss, making the breakage intermittent and hard to trace.
+        #
+        # Dependabot updates the ref but has no way to see this input, so the two
+        # have to be re-synced by hand whenever its grouped PR lands.
         version: 'v1.21.1'
 
     - name: Install blockwatch
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
       run: |
-        # `cargo-binstall`, not `cargo binstall`: the step above installs binstall but
-        # not Rust, so `cargo` itself may be missing on a self-hosted runner.
-        # --disable-strategies compile: without a Rust toolchain on the runner, a
-        # silent fallback to `cargo install` would just fail with a confusing
-        # "cargo: command not found" instead of a clear "no binary available".
+        # The `cargo-binstall` executable, not the `cargo binstall` subcommand:
+        # the step above installs binstall on its own without a Rust toolchain,
+        # so a self-hosted runner may have no `cargo` to dispatch through.
+        #
+        # --disable-strategies compile bans the source-build fallback. On a
+        # target with no prebuilt binary, that fallback invokes `cargo install`
+        # and dies on the missing toolchain with "cargo: command not found",
+        # which sends the reader after the wrong problem. Refusing to compile
+        # names the real one: no binary is published for this platform.
         cargo-binstall --no-confirm --disable-strategies compile "blockwatch@${{ steps.blockwatch-version.outputs.version }}"
       shell: bash
 
     - name: Run blockwatch on diff
       id: diff
       run: |
-        # Process inputs
-        # Use an array to store arguments to handle spaces within arguments correctly
+        # An array, not a string: an extension mapping or glob containing spaces
+        # has to arrive as a single argv entry, and re-splitting a flat string on
+        # whitespace would tear it into several.
         BLOCKWATCH_ARGS=()
 
-        # Helper function to add arguments
+        # Every list-valued input accepts comma- or newline-separated values,
+        # because a YAML block scalar is the readable way to write a long list in
+        # a workflow file and a quoted string is the terse one. Both normalize to
+        # one flag/value pair per item.
         add_args() {
           local flag="$1"
           local input="$2"
           if [[ -n "$input" ]]; then
-            # Replace newlines with commas to handle multiline inputs
+            # Newlines become commas so a single split handles both spellings.
             local clean_input="${input//$'\n'/,}"
             IFS=',' read -ra ITEMS <<< "$clean_input"
             for item in "${ITEMS[@]}"; do
-              # Trim leading/trailing whitespace
+              # Items arrive carrying the indentation of a YAML block scalar and
+              # whatever spacing followed a comma; blockwatch would read that
+              # padding as part of the value.
               item="$(echo "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
               if [[ -n "$item" ]]; then
                 if [[ -n "$flag" ]]; then
@@ -126,14 +156,27 @@ runs:
         add_args "-e" "${{ inputs.enable }}"
         add_args "-d" "${{ inputs.disable }}"
         add_args "--ignore" "${{ inputs.ignore }}"
-        add_args "" "${{ inputs.globs }}"
 
-        # Prepare optional diff pathspec/args from input
+        # Globs are positional, so they must come last and nothing may be
+        # appended after this point.
+        ARGS_BEFORE_GLOBS=${#BLOCKWATCH_ARGS[@]}
+        add_args "" "${{ inputs.globs }}"
+        # Whether any glob survived has to be read from the array rather than the
+        # raw input: a value such as " , " is a non-empty string that yields no
+        # glob at all. The no-diff branch at the bottom uses this to tell a run
+        # with real work to do from one with none.
+        HAS_GLOBS=$(( ${#BLOCKWATCH_ARGS[@]} > ARGS_BEFORE_GLOBS ))
+
+        # Every use below leaves this unquoted on purpose, so one input can carry
+        # several space-separated pathspecs (":(exclude).github/ :(exclude)docs/").
+        # The shellcheck directives mark that word-splitting as intended.
         DIFF_PATHSPEC="${{ inputs.diff_pathspec }}"
 
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          # For Pull Requests: Compare the target branch base with the PR head commit
-          # Use -- to separate revisions from pathspecs if provided
+          # Three dots: diffing against the merge base shows what the PR itself
+          # changed, excluding commits the base branch gained since it forked.
+          # Two dots would attribute those to the PR.
+          # `--` keeps git from reading a pathspec as a revision name.
           if [[ -n "$DIFF_PATHSPEC" ]]; then
             # shellcheck disable=SC2086
             git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
@@ -142,18 +185,35 @@ runs:
           fi
 
         elif [[ "${{ github.event_name }}" == "push" ]]; then
-          # For Pushes: Compare the commit before the push with the current/after commit
+          # The span the push added: the branch tip beforehand, up to the new one.
           BEFORE_SHA="${{ github.event.before }}"
           CURRENT_SHA="${{ github.sha }}" # same as github.event.after for push events
 
-          # Handle the initial push to a new branch where BEFORE_SHA is 0000...
+          # A push that creates a branch reports an all-zero "before" SHA: there
+          # is no prior tip, so the head commit is diffed against the empty tree.
           if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
-            # Use git diff --root so that pathspecs can be applied as well
+            # `git diff-tree`, not `git diff`. --root belongs to diff-tree, and
+            # `git diff` accepts it silently rather than rejecting it, then
+            # compares the *working tree* against the SHA — on this action's
+            # clean checkout an empty patch, letting every validator pass without
+            # examining anything.
+            #
+            # -m --first-parent is load-bearing: diff-tree prints nothing at all
+            # for a merge commit unless asked, and a newly pushed branch can
+            # perfectly well have a merge at its head.
+            #
+            # --no-commit-id drops the bare SHA line diff-tree emits ahead of the
+            # patch. It is not part of the diff format blockwatch documents as
+            # its input, so relying on it being tolerated would be a wager.
+            #
+            # Only the head commit is covered: a new branch has no base to diff
+            # its earlier commits against. Those get checked when it is opened as
+            # a pull request.
             if [[ -n "$DIFF_PATHSPEC" ]]; then
               # shellcheck disable=SC2086
-              git diff --patch --root $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
+              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
             else
-              git diff --patch --root $CURRENT_SHA | blockwatch "${BLOCKWATCH_ARGS[@]}"
+              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA | blockwatch "${BLOCKWATCH_ARGS[@]}"
             fi
           else
             if [[ -n "$DIFF_PATHSPEC" ]]; then
@@ -165,6 +225,22 @@ runs:
           fi
 
         else
-          echo "Warning: Unsupported event type '${{ github.event_name }}'. Skipping diff."
+          # Any other event (workflow_dispatch and schedule, typically) has no
+          # diff to build. The whole-tree glob scan never needed one, so it still
+          # runs: reporting a passing check that inspected nothing would be worse
+          # than either failing or doing the work. Diff-driven validators such as
+          # `affects` have nothing to compare on these events regardless.
+          if [[ "$HAS_GLOBS" == 1 ]]; then
+            echo "Note: event '${{ github.event_name }}' provides no diff. Running glob checks only; diff-driven checks (e.g. affects) are skipped."
+            # </dev/null hands blockwatch a closed stdin so it reads an empty
+            # diff immediately, instead of blocking on whichever descriptor the
+            # runner happened to attach.
+            blockwatch "${BLOCKWATCH_ARGS[@]}" < /dev/null
+          else
+            # No diff and no globs leaves nothing to check. That is worth saying
+            # out loud: it usually means the workflow triggers on an event this
+            # action cannot act on, and the green check it produces is empty.
+            echo "Warning: Unsupported event type '${{ github.event_name }}' and no 'globs' input, so there is nothing to check. Skipping."
+          fi
         fi
       shell: bash

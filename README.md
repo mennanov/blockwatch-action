@@ -37,6 +37,21 @@ jobs:
           diff_pathspec: ":(exclude).github/ :(exclude)docs/"
 ```
 
+## Known limitations
+
+- **`globs` does not reach into hidden directories.** A pattern like `.github/**/*.yml` matches nothing,
+  because blockwatch's file walker skips dot-directories before the pattern is applied
+  ([mennanov/blockwatch#100](https://github.com/mennanov/blockwatch/issues/100), open as of 0.3.9). This
+  affects only the whole-tree `globs` scan — files under `.github/` **are** still checked when they show up
+  in the diff, which is the normal case on a pull request or push. The gap is that listing such a glob looks
+  like it adds a whole-tree check on those files, and it does not.
+- **On the first push to a new branch, only the head commit is checked.** That push reports no previous
+  revision to diff against, and a brand-new branch has no base to substitute, so earlier commits in the same
+  push are not examined. They get checked normally on the pull request.
+- **Events other than `pull_request` and `push` run glob checks only.** There is no diff on a
+  `workflow_dispatch` or `schedule` run, so diff-driven validators such as `affects` cannot run. If `globs`
+  is set, the whole-tree scan still runs; if it isn't, the step logs a warning and does nothing.
+
 ## Runner requirements
 
 Works out of the box on GitHub-hosted runners. A **self-hosted** runner needs a few things in place:
