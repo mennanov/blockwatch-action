@@ -44,3 +44,15 @@ jobs:
             check-ai
             line-count
           globs: "**/*.md"
+
+      - name: Run Blockwatch Action (Verbosity Summary)
+        uses: ./
+        with:
+          verbosity: "summary"
+          globs: "**/*.md"
+
+      - name: Run Blockwatch Action (Verbosity Full)
+        uses: ./
+        with:
+          verbosity: "full"
+          globs: "**/*.md"

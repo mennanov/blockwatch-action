@@ -22,6 +22,10 @@ inputs:
     description: 'Glob patterns for files to check (comma separated)'
     required: false
     default: ''
+  verbosity:
+    description: 'How much to report about what the run checked: "none", "summary" or "full" (JSON). Single value, not a list. Empty leaves blockwatch at its default of "none".'
+    required: false
+    default: ''
   diff_pathspec:
     description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces)"
     required: false
@@ -72,7 +76,7 @@ runs:
       # command read this output instead of repeating the literal, so upgrading
       # blockwatch is a one-line edit that cannot leave the two disagreeing —
       # a stale key would serve the old binary under the new version's name.
-      run: echo "version=0.3.9" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.3.10" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
@@ -156,6 +160,26 @@ runs:
         add_args "-e" "${{ inputs.enable }}"
         add_args "-d" "${{ inputs.disable }}"
         add_args "--ignore" "${{ inputs.ignore }}"
+
+        # verbosity holds one enum value (none|summary|full) rather than a list,
+        # so it does not go through add_args. A comma-separated value there would
+        # expand to --verbosity twice, and clap answers a repeated single-value
+        # flag by keeping the last occurrence — so a malformed input would be
+        # quietly acted on instead of reported.
+        #
+        # A bare token needs no more normalization than having its whitespace
+        # removed. An empty input appends nothing at all, leaving blockwatch on
+        # its own default of "none", so workflows that never set this input are
+        # unaffected by its existence.
+        #
+        # The level is deliberately not validated here: blockwatch rejects an
+        # unknown one and prints the accepted values, which tells the reader more
+        # than this step could.
+        VERBOSITY="${{ inputs.verbosity }}"
+        VERBOSITY="${VERBOSITY//[$'\n\r\t ']/}"
+        if [[ -n "$VERBOSITY" ]]; then
+          BLOCKWATCH_ARGS+=("--verbosity" "$VERBOSITY")
+        fi
 
         # Globs are positional, so they must come last and nothing may be
         # appended after this point.

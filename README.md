@@ -31,17 +31,35 @@ jobs:
           # If provided, blockwatch will run on these files in addition to the diff
           globs: "**/*.md,**/*.yml"
 
+          # Optional: report what the run actually checked, on stdout.
+          # One of "none" (default), "summary" (a line of counts) or "full" (JSON).
+          # Violations still go to stderr, so the two can be parsed separately.
+          verbosity: "summary"
+
           # Optional: control git diff pathspecs, e.g. exclude .github directory
           # Works like: git diff --patch ... -- ':(exclude).github/'
           # You can provide multiple space-separated pathspecs/options
           diff_pathspec: ":(exclude).github/ :(exclude)docs/"
 ```
 
+## Seeing what ran
+
+A green check means nothing failed — not that anything was checked. `verbosity: "summary"` puts one line of
+counts in the job log so a run that validated nothing is visible rather than indistinguishable from a clean one:
+
+```
+blockwatch: 34/240 files, 61 blocks (3 unchecked), 73 checks, 0 violations
+```
+
+`verbosity: "full"` prints the same thing as JSON, listing every block in scope and the validators that checked
+it. The report goes to **stdout** and violations go to **stderr**, so each can be piped and parsed on its own.
+Under a diff the report covers only the blocks that diff touched.
+
 ## Known limitations
 
 - **`globs` does not reach into hidden directories.** A pattern like `.github/**/*.yml` matches nothing,
   because blockwatch's file walker skips dot-directories before the pattern is applied
-  ([mennanov/blockwatch#100](https://github.com/mennanov/blockwatch/issues/100), open as of 0.3.9). This
+  ([mennanov/blockwatch#100](https://github.com/mennanov/blockwatch/issues/100), open as of 0.3.10). This
   affects only the whole-tree `globs` scan — files under `.github/` **are** still checked when they show up
   in the diff, which is the normal case on a pull request or push. The gap is that listing such a glob looks
   like it adds a whole-tree check on those files, and it does not.
