@@ -23,9 +23,9 @@ inputs:
     required: false
     default: ''
   verbosity:
-    description: 'How much to report about what the run checked: "none", "summary" or "full" (JSON). Single value, not a list. Empty leaves blockwatch at its default of "none".'
+    description: 'How much to report about what the run checked: "none", "summary" (default) or "full" (JSON).'
     required: false
-    default: ''
+    default: 'summary'
   diff_pathspec:
     description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces)"
     required: false
@@ -169,8 +169,7 @@ runs:
         #
         # A bare token needs no more normalization than having its whitespace
         # removed. An empty input appends nothing at all, leaving blockwatch on
-        # its own default of "none", so workflows that never set this input are
-        # unaffected by its existence.
+        # its own default of "none".
         #
         # The level is deliberately not validated here: blockwatch rejects an
         # unknown one and prints the accepted values, which tells the reader more

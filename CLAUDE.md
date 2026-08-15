@@ -56,7 +56,7 @@ Every list input accepts comma-separated *or* newline-separated values. The `add
 
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
 
-`verbosity` is the one input that does **not** go through `add_args`: it's a single clap enum (`none`/`summary`/`full`), not a list, and feeding a comma-separated value to `add_args` would emit `--verbosity` twice, which clap resolves by silently keeping the last one. It's trimmed inline instead and appended only when non-empty, so the default path passes no flag at all and blockwatch applies its own default of `none`. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
+`verbosity` is the one input that does **not** go through `add_args`: it's a single clap enum (`none`/`summary`/`full`), not a list, and feeding a comma-separated value to `add_args` would emit `--verbosity` twice, which clap resolves by silently keeping the last one. It's trimmed inline instead and appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
 
 Anything appended to `BLOCKWATCH_ARGS` must land **before** the `ARGS_BEFORE_GLOBS` snapshot: `globs` are positional and have to stay last, and that snapshot is what `HAS_GLOBS` compares against to decide whether the no-diff branch has anything to run.
 
