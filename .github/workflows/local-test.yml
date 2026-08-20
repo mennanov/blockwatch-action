@@ -56,3 +56,9 @@ jobs:
         with:
           verbosity: "full"
           globs: "**/*.md"
+
+      - name: Run Blockwatch Action (Only Changed)
+        uses: ./
+        with:
+          only_changed: "true"
+          verbosity: "summary"

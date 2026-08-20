@@ -19,15 +19,19 @@ inputs:
     required: false
     default: ''
   globs:
-    description: 'Glob patterns for files to check (comma separated)'
+    description: 'Glob patterns for files to check (comma separated). They narrow the run: only matching files are checked.'
     required: false
     default: ''
   verbosity:
     description: 'How much to report about what the run checked: "none", "summary" (default) or "full" (JSON).'
     required: false
     default: 'summary'
+  only_changed:
+    description: 'Validate only the blocks the diff touched ("true") instead of every block in the repository ("false", the default). No effect on events that have no diff'
+    required: false
+    default: 'false'
   diff_pathspec:
-    description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces)"
+    description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that"
     required: false
     default: ''
 
@@ -76,7 +80,7 @@ runs:
       # command read this output instead of repeating the literal, so upgrading
       # blockwatch is a one-line edit that cannot leave the two disagreeing —
       # a stale key would serve the old binary under the new version's name.
-      run: echo "version=0.3.11" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.4.0" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
@@ -181,19 +185,29 @@ runs:
         fi
 
         # Globs are positional, so they must come last and nothing may be
-        # appended after this point.
-        ARGS_BEFORE_GLOBS=${#BLOCKWATCH_ARGS[@]}
+        # appended after this point. They narrow whichever set of files the run
+        # already selected — since blockwatch 0.4.0 a glob can only ever remove
+        # files from a run, never add one back that the mode left out.
         add_args "" "${{ inputs.globs }}"
-        # Whether any glob survived has to be read from the array rather than the
-        # raw input: a value such as " , " is a non-empty string that yields no
-        # glob at all. The no-diff branch at the bottom uses this to tell a run
-        # with real work to do from one with none.
-        HAS_GLOBS=$(( ${#BLOCKWATCH_ARGS[@]} > ARGS_BEFORE_GLOBS ))
 
         # Every use below leaves this unquoted on purpose, so one input can carry
         # several space-separated pathspecs (":(exclude).github/ :(exclude)docs/").
         # The shellcheck directives mark that word-splitting as intended.
         DIFF_PATHSPEC="${{ inputs.diff_pathspec }}"
+
+        # --diff is what makes blockwatch read the piped diff at all; without it
+        # stdin is ignored and the tree is scanned as if nothing had changed.
+        # --only-changed then narrows the run from every block in the repository
+        # to the ones that diff touched. An unrecognized boolean is rejected
+        # rather than read as false, since nothing downstream would report it.
+        ONLY_CHANGED="${{ inputs.only_changed }}"
+        ONLY_CHANGED="${ONLY_CHANGED//[$'\n\r\t ']/}"
+        DIFF_FLAGS=(--diff)
+        case "$ONLY_CHANGED" in
+          true|True|TRUE) DIFF_FLAGS+=(--only-changed) ;;
+          false|False|FALSE|'') ;;
+          *) echo "Error: 'only_changed' must be \"true\" or \"false\", got '$ONLY_CHANGED'." >&2; exit 1 ;;
+        esac
 
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
           # Three dots: diffing against the merge base shows what the PR itself
@@ -202,9 +216,9 @@ runs:
           # `--` keeps git from reading a pathspec as a revision name.
           if [[ -n "$DIFF_PATHSPEC" ]]; then
             # shellcheck disable=SC2086
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
+            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
           else
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch "${BLOCKWATCH_ARGS[@]}"
+            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
           fi
 
         elif [[ "${{ github.event_name }}" == "push" ]]; then
@@ -234,36 +248,21 @@ runs:
             # a pull request.
             if [[ -n "$DIFF_PATHSPEC" ]]; then
               # shellcheck disable=SC2086
-              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
+              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
             else
-              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA | blockwatch "${BLOCKWATCH_ARGS[@]}"
+              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
             fi
           else
             if [[ -n "$DIFF_PATHSPEC" ]]; then
               # shellcheck disable=SC2086
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${BLOCKWATCH_ARGS[@]}"
+              git diff --patch $BEFORE_SHA...$CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
             else
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch "${BLOCKWATCH_ARGS[@]}"
+              git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
             fi
           fi
 
         else
-          # Any other event (workflow_dispatch and schedule, typically) has no
-          # diff to build. The whole-tree glob scan never needed one, so it still
-          # runs: reporting a passing check that inspected nothing would be worse
-          # than either failing or doing the work. Diff-driven validators such as
-          # `affects` have nothing to compare on these events regardless.
-          if [[ "$HAS_GLOBS" == 1 ]]; then
-            echo "Note: event '${{ github.event_name }}' provides no diff. Running glob checks only; diff-driven checks (e.g. affects) are skipped."
-            # </dev/null hands blockwatch a closed stdin so it reads an empty
-            # diff immediately, instead of blocking on whichever descriptor the
-            # runner happened to attach.
-            blockwatch "${BLOCKWATCH_ARGS[@]}" < /dev/null
-          else
-            # No diff and no globs leaves nothing to check. That is worth saying
-            # out loud: it usually means the workflow triggers on an event this
-            # action cannot act on, and the green check it produces is empty.
-            echo "Warning: Unsupported event type '${{ github.event_name }}' and no 'globs' input, so there is nothing to check. Skipping."
-          fi
+          echo "Note: event '${{ github.event_name }}' provides no diff, so the whole repository is scanned. Diff-driven checks (e.g. affects) cannot run, and 'only_changed' does not apply."
+          blockwatch "${BLOCKWATCH_ARGS[@]}"
         fi
       shell: bash

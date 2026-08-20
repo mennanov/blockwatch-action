@@ -35,7 +35,7 @@ Seven sequential steps, each with a non-obvious constraint:
 4. **Cache** `blockwatch{,.exe}` under the step-2 directory, keyed on `runner.os` + `runner.arch` + the step-3 version. `runner.arch` matters because the cache is shared across a repo's runners, so a mixed-architecture fleet would otherwise restore a binary for the wrong arch.
 5. **Install cargo-binstall** via `cargo-bins/cargo-binstall`, skipped on cache hit. The version appears **twice**, deliberately: the `uses:` ref pins the action and its install script, while the `version:` input pins the executable that script downloads. Omitting the input is not a smaller pin but a different one — the script then fetches from `releases/latest`, so a new cargo-binstall release reaches every `@v1` consumer with no change here, and only on a cache miss, which makes any resulting breakage intermittent. Dependabot bumps the `uses:` ref but not the input, so re-sync the two by hand when the grouped PR lands.
 6. **Install blockwatch** by calling `cargo-binstall`, *not* `cargo binstall` — the previous step ships binstall alone and no toolchain, so `cargo` may not exist. Passes `--disable-strategies compile`: without that, a target with no prebuilt binary would silently fall through to `cargo install`, which needs `cargo` and would just fail with a confusing "command not found" instead of a clear "no binary available".
-7. **Run** — pipes `git diff --patch` into `blockwatch`. blockwatch's exit code is what fails the job.
+7. **Run** — pipes `git diff --patch` into `blockwatch "${DIFF_FLAGS[@]}"`. blockwatch's exit code is what fails the job. See [Run mode](#run-mode) for what that array holds.
 
 The version is pinned deliberately, not resolved dynamically: bump the string in step 3 when a new blockwatch release should be picked up. There's no Dependabot or other automation for this — it doesn't track arbitrary strings inside `action.yml`.
 
@@ -45,26 +45,42 @@ Self-hosted runners are supported but assume no Rust toolchain; the requirements
 
 Every list input accepts comma-separated *or* newline-separated values. The `add_args` bash helper normalizes newlines to commas, splits on comma, trims whitespace, and appends each item to the `BLOCKWATCH_ARGS` array (an array, not a string, so values containing spaces survive). Flag mapping:
 
-| input | flag |
-|---|---|
-| `extensions` | `-E` |
-| `enable` | `-e` |
-| `disable` | `-d` |
-| `ignore` | `--ignore` |
-| `verbosity` | `--verbosity` *(scalar, see below)* |
-| `globs` | *(positional)* |
+| input          | flag                                    |
+| -------------- | --------------------------------------- |
+| `extensions`   | `-E`                                    |
+| `enable`       | `-e`                                    |
+| `disable`      | `-d`                                    |
+| `ignore`       | `--ignore`                              |
+| `verbosity`    | `--verbosity` *(scalar, see below)*     |
+| `only_changed` | `--only-changed` *(boolean, see below)* |
+| `globs`        | *(positional)*                          |
 
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
 
+`only_changed` is a boolean, so it does not go through `add_args` either. It arrives as a string — composite actions have no typed inputs — and a `case` maps `true`/`True`/`TRUE` to the `--only-changed` flag and `false`/`False`/`FALSE`/empty to nothing. Anything else exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
+
 `verbosity` is the one input that does **not** go through `add_args`: it's a single clap enum (`none`/`summary`/`full`), not a list, and feeding a comma-separated value to `add_args` would emit `--verbosity` twice, which clap resolves by silently keeping the last one. It's trimmed inline instead and appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
 
-Anything appended to `BLOCKWATCH_ARGS` must land **before** the `ARGS_BEFORE_GLOBS` snapshot: `globs` are positional and have to stay last, and that snapshot is what `HAS_GLOBS` compares against to decide whether the no-diff branch has anything to run.
+`globs` are positional, so they are appended last and nothing may follow them in `BLOCKWATCH_ARGS`. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
+
+### Run mode
+
+blockwatch 0.4.0 stopped inferring the run mode from stdin. `--diff` is the only thing that makes it read one, and `--only-changed` narrows the run to the blocks that diff touched. `DIFF_FLAGS` holds that pair: always `--diff`, plus `--only-changed` when the `only_changed` input says so. Events with no diff run a bare `blockwatch` and use neither.
+
+The default (`only_changed: false`) validates **every block in the repository** and uses the diff only to mark which blocks changed — the comparison `affects` is built on — so a pull request reports what it inherited as well as what it introduced. Two things follow from the repository walk, rather than the diff, defining the scope:
+
+- **A changed file the walk never reaches is dropped, not checked.** The walk skips dot-directories ([blockwatch#100](https://github.com/mennanov/blockwatch/issues/100)), so a block under `.github/` goes unchecked even when the diff touches it. Verified against 0.4.0; the fix belongs in blockwatch, not here.
+- **`diff_pathspec` no longer keeps a file out of the run**, since the diff only decides which blocks count as changed. `ignore` is what excludes files from the scan.
+
+`only_changed: true` makes the diff the scope again, exactly as before 0.4.0, and both of those revert with it.
+
+**An empty diff fails the step** in either mode (`diff in stdin is empty.`), where it used to pass silently. `diff_pathspec` excluding everything a push touched, and a force-push resetting to an older commit, are the two realistic ways to hit it. A guard was considered and rejected — a linter that silently passes on an input it cannot read is the failure mode 0.4.0 exists to remove.
 
 ### Diff selection per event
 
 - `pull_request`: `origin/${{ github.base_ref }}...${{ github.sha }}`
 - `push`: `${{ github.event.before }}...${{ github.sha }}`, falling back to `git diff-tree --patch --root -m --first-parent --no-commit-id <sha>` when `before` is all zeros (first push to a new branch). Every flag there is load-bearing: this was `git diff --patch --root <sha>`, but `--root` is a *diff-tree* option that `git diff` accepts silently rather than rejecting, so the command compared the working tree against `<sha>` — always a 0-byte patch on a clean checkout, making every `affects` check pass vacuously. `-m --first-parent` is what makes merge commits emit anything; without it `diff-tree` prints nothing for a merge and the empty patch returns whenever a new branch has a merge at its head. `--no-commit-id` suppresses the bare SHA line `git diff` never emits (blockwatch has tolerated it so far, but the pipeline shouldn't lean on that — it's outside the diff format blockwatch documents as its input contract). An empty-tree SHA would also work with `diff_pathspec` — contrary to what this file used to claim — but it renders `affects` useless, since a whole-tree patch marks both sides of every pair as modified. Only the head commit is covered; a new branch has no base, so earlier commits in the push are checked on the PR instead.
-- anything else: no diff exists, so the step runs `blockwatch` against empty stdin **when `globs` is non-empty** — the whole-tree glob scan never needed a diff. This branch used to skip the run entirely, which reported a green check that validated nothing on `workflow_dispatch`/`schedule`. With no `globs` there is genuinely nothing to do, and it warns instead. Diff-driven validators like `affects` can't run here either way. If you add real support for a new event, add its branch above.
+- anything else: no diff exists, so the step runs a bare `blockwatch` — the same whole-tree scan as the default mode, minus the marks saying which blocks changed, and with `only_changed` inapplicable (the note says so unconditionally rather than reading the input). No `< /dev/null` guard is needed: without `--diff` blockwatch never touches stdin, so there is no descriptor to block on. This branch used to run only when `globs` was non-empty and warn otherwise, because a diff-less run with no globs checked nothing; since 0.4.0 a bare run scans the tree, so there is always real work to do. Diff-driven validators like `affects` still can't run here. If you add real support for a new event, add its branch above.
 
 `diff_pathspec` is intentionally unquoted (`-- $DIFF_PATHSPEC`) so callers can pass multiple space-separated pathspecs like `:(exclude).github/`; the `shellcheck disable=SC2086` comments mark this as deliberate.
 

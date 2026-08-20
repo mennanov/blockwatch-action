@@ -1,91 +1,99 @@
 # blockwatch-action
 
-GitHub Action for [mennanov/blockwatch](https://github.com/mennanov/blockwatch) linter.
+GitHub Action that runs the [blockwatch](https://github.com/mennanov/blockwatch) linter on your repository.
 
-## Use in a GitHub Action
-
-Add the following to your workflow `.yml` file:
+## Quick start
 
 ```yaml
-jobs:
+on: [push, pull_request]
 
+jobs:
   blockwatch:
     runs-on: ubuntu-latest
-
     steps:
       - uses: mennanov/blockwatch-action@v1
-        with:
-          # Optional: pass extensions to blockwatch, comma-separated key=value or on new lines
-          extensions: "foo=bar,baz=qux"
-
-          # Optional: Validators to enable (comma separated)
-          enable: "keep-sorted,keep-unique"
-
-          # Optional: Validators to disable (comma separated), can't be used with "enable"
-          # disable: "check-ai"
-
-          # Optional: Glob patterns for files to ignore (comma separated)
-          ignore: "target/**,dist/**"
-
-          # Optional: Glob patterns for files to check (comma separated)
-          # If provided, blockwatch will run on these files in addition to the diff
-          globs: "**/*.md,**/*.yml"
-
-          # Optional: report what the run actually checked, on stdout.
-          # One of "none" (default), "summary" (a line of counts) or "full" (JSON).
-          # Violations still go to stderr, so the two can be parsed separately.
-          verbosity: "summary"
-
-          # Optional: control git diff pathspecs, e.g. exclude .github directory
-          # Works like: git diff --patch ... -- ':(exclude).github/'
-          # You can provide multiple space-separated pathspecs/options
-          diff_pathspec: ":(exclude).github/ :(exclude)docs/"
 ```
+
+This checks every block in the repository. All inputs below are optional.
+
+## Inputs
+
+| Input           | Default     | What it does                                                                                  |
+| --------------- | ----------- | --------------------------------------------------------------------------------------------- |
+| `only_changed`  | `"false"`   | `"true"` checks only the blocks the diff touched. See [What gets checked](#what-gets-checked) |
+| `globs`         |             | Check only files matching these patterns, e.g. `"**/*.md,**/*.yml"`                           |
+| `ignore`        |             | Skip files matching these patterns, e.g. `"target/**,dist/**"`                                |
+| `enable`        |             | Run only these validators, e.g. `"keep-sorted,keep-unique"`                                   |
+| `disable`       |             | Run all validators except these, e.g. `"check-ai"`. Cannot be used with `enable`              |
+| `extensions`    |             | Treat one file extension as another, e.g. `"cxx=cpp"`                                         |
+| `verbosity`     | `"summary"` | `"none"`, `"summary"` (a line of counts) or `"full"` (JSON)                                   |
+| `diff_pathspec` |             | Extra git pathspecs for the diff, e.g. `":(exclude).github/"`                                 |
+
+Every list input takes commas or one value per line:
+
+```yaml
+ignore: |
+  target/**
+  dist/**
+```
+
+## What gets checked
+
+On a `push` or `pull_request` the action builds a git diff and hands it to blockwatch. `only_changed` decides
+what that diff is used for:
+
+| `only_changed`      | Blocks checked                   | What the diff does         |
+| ------------------- | -------------------------------- | -------------------------- |
+| `"false"` (default) | Every block in the repository    | Marks which blocks changed |
+| `"true"`            | Only the blocks the diff touched | Picks what to check        |
+
+`globs` and `ignore` narrow both modes. `diff_pathspec` only shapes the diff.
+
+> Before blockwatch 0.4.0 this action always behaved like `only_changed: "true"`. Set it to `"true"` to keep
+> that behaviour.
 
 ## Seeing what ran
 
-A green check means nothing failed — not that anything was checked. `verbosity: "summary"` puts one line of
-counts in the job log so a run that validated nothing is visible rather than indistinguishable from a clean one:
+A green check means nothing failed, not that anything was checked. `verbosity: "summary"` logs one line of
+counts, and `verbosity: "full"` prints the same report as JSON:
 
 ```
-blockwatch: 34/240 files, 61 blocks (3 unchecked), 73 checks, 0 violations
+blockwatch: mode=all+diff, 240/240 files, 61 blocks (3 unchecked), 73 checks, 0 violations
 ```
 
-`verbosity: "full"` prints the same thing as JSON, listing every block in scope and the validators that checked
-it. The report goes to **stdout** and violations go to **stderr**, so each can be piped and parsed on its own.
-Under a diff the report covers only the blocks that diff touched.
+See [Run Reports](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#run-reports) for how to read
+it.
 
 ## Known limitations
 
-- **`globs` does not reach into hidden directories.** A pattern like `.github/**/*.yml` matches nothing,
-  because blockwatch's file walker skips dot-directories before the pattern is applied
-  ([mennanov/blockwatch#100](https://github.com/mennanov/blockwatch/issues/100), open as of 0.3.10). This
-  affects only the whole-tree `globs` scan — files under `.github/` **are** still checked when they show up
-  in the diff, which is the normal case on a pull request or push. The gap is that listing such a glob looks
-  like it adds a whole-tree check on those files, and it does not.
-- **On the first push to a new branch, only the head commit is checked.** That push reports no previous
-  revision to diff against, and a brand-new branch has no base to substitute, so earlier commits in the same
-  push are not examined. They get checked normally on the pull request.
-- **Events other than `pull_request` and `push` run glob checks only.** There is no diff on a
-  `workflow_dispatch` or `schedule` run, so diff-driven validators such as `affects` cannot run. If `globs`
-  is set, the whole-tree scan still runs; if it isn't, the step logs a warning and does nothing.
+- **Blocks in hidden directories are skipped.** blockwatch does not walk dot-directories, so a block in
+  `.github/workflows/ci.yml` is never found and `.github/**/*.yml` matches nothing
+  ([blockwatch#100](https://github.com/mennanov/blockwatch/issues/100)). `only_changed: "true"` does check
+  them, because there the diff decides what to check.
+- **An empty diff fails the step.** blockwatch errors on input it cannot read as a diff. That happens when
+  `diff_pathspec` excludes everything a push changed, or after a force-push to an older commit. Add an `if:`
+  condition if your workflow can produce one.
+- **`diff_pathspec` does not exclude files from the default run**, only from the diff. Use `ignore` for that.
+- **The first push of a new branch only diffs its last commit.** GitHub reports no previous tip for a new
+  branch, so the action compares the head commit against its parent. Changes from earlier commits in the same
+  push are not marked as changed; they get checked when you open a pull request.
+- **Other events have no diff.** On `workflow_dispatch` or `schedule` the whole repository is still checked,
+  but rules that need a diff (such as `affects`) do not run and `only_changed` is ignored.
 
 ## Runner requirements
 
-Works out of the box on GitHub-hosted runners. A **self-hosted** runner needs a few things in place:
+GitHub-hosted runners work out of the box. No Rust toolchain is needed: `cargo-binstall` downloads a prebuilt
+binary instead of compiling one. A self-hosted runner needs:
 
-- **Actions Runner 2.327.1 or newer** — `actions/checkout@v7` and `actions/cache@v6` run on Node 24, which requires it.
-- **glibc 2.28 or newer** — also a Node 24 requirement. Rules out CentOS 7, Ubuntu 18.04, and musl-based images like Alpine.
-- **git 2.18 or newer** — older versions make `actions/checkout` silently fall back to downloading a tarball with no `.git` directory, which breaks the `git diff` this action depends on.
-- **bash** — every step runs with `shell: bash`; on Windows that means Git Bash needs to be on `PATH`.
-- **curl, plus tar (Linux) or unzip (macOS/Windows)** — used by `cargo-binstall` to fetch the prebuilt binary.
-- **Network access to `github.com` and `crates.io`** — needed by `cargo-binstall` to download the binary. There's no offline install path.
-- **A writable `CARGO_HOME`** (or `CARGO_INSTALL_ROOT`, if that's set instead) — the resolved directory is used as-is, with no fallback, so the install step fails outright if it isn't writable.
-
-A Rust toolchain is **not** required — the binary comes from `cargo-binstall`, never built from source.
-
-The binary is installed into, and cached from, whichever of these is set first: `$CARGO_INSTALL_ROOT/bin`,
-`$CARGO_HOME/bin`, or `~/.cargo/bin`. That directory is added to `PATH` for the rest of the job.
+- **Actions Runner 2.327.1+ and glibc 2.28+** — `actions/checkout@v7` and `actions/cache@v6` need Node 24.
+  Rules out Alpine, CentOS 7 and Ubuntu 18.04.
+- **git 2.18+** — older versions make `actions/checkout` download a tarball with no `.git` directory, and the
+  action needs `git diff`.
+- **bash** — on Windows, Git Bash on `PATH`.
+- **curl, plus tar (Linux) or unzip (macOS/Windows)** — used to fetch the binary.
+- **Access to `github.com` and `crates.io`** — there is no offline install path.
+- **A writable `CARGO_HOME`** (or `CARGO_INSTALL_ROOT`, if set) — the binary is installed and cached in its
+  `bin` directory, which is added to `PATH` for the rest of the job.
 
 ## Running tests locally
 
