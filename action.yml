@@ -80,7 +80,7 @@ runs:
       # command read this output instead of repeating the literal, so upgrading
       # blockwatch is a one-line edit that cannot leave the two disagreeing —
       # a stale key would serve the old binary under the new version's name.
-      run: echo "version=0.4.0" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.4.1" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
