@@ -49,6 +49,10 @@ what that diff is used for:
 
 `globs` and `ignore` narrow both modes. `diff_pathspec` only shapes the diff.
 
+Hidden directories such as `.github/` are scanned like any others; only the state directories of a version
+control system (`.git`, `.hg`, `.jj`, `.svn`) are skipped, along with whatever `.gitignore` and `ignore`
+exclude.
+
 > Before blockwatch 0.4.0 this action always behaved like `only_changed: "true"`. Set it to `"true"` to keep
 > that behaviour.
 
@@ -66,10 +70,6 @@ it.
 
 ## Known limitations
 
-- **Blocks in hidden directories are skipped.** blockwatch does not walk dot-directories, so a block in
-  `.github/workflows/ci.yml` is never found and `.github/**/*.yml` matches nothing
-  ([blockwatch#100](https://github.com/mennanov/blockwatch/issues/100)). `only_changed: "true"` does check
-  them, because there the diff decides what to check.
 - **An empty diff fails the step.** blockwatch errors on input it cannot read as a diff. That happens when
   `diff_pathspec` excludes everything a push changed, or after a force-push to an older commit. Add an `if:`
   condition if your workflow can produce one.
@@ -78,7 +78,9 @@ it.
   branch, so the action compares the head commit against its parent. Changes from earlier commits in the same
   push are not marked as changed; they get checked when you open a pull request.
 - **Other events have no diff.** On `workflow_dispatch` or `schedule` the whole repository is still checked,
-  but rules that need a diff (such as `affects`) do not run and `only_changed` is ignored.
+  but a check that needs to know what changed (such as whether an `affects` target was updated alongside its
+  source) does not run, and `only_changed` is ignored. `affects` still verifies that the blocks it names
+  exist.
 
 ## Runner requirements
 
