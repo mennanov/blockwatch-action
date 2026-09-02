@@ -97,7 +97,7 @@ runs:
 
     - name: Install cargo-binstall
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
-      uses: cargo-bins/cargo-binstall@v1.21.1
+      uses: cargo-bins/cargo-binstall@v1.22.0
       with:
         # Two independent pins are required. The `uses:` ref above fixes the
         # action and the install script it runs; this input fixes the executable
