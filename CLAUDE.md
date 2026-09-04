@@ -51,11 +51,20 @@ Every list input accepts comma-separated *or* newline-separated values. The `add
 | `enable`       | `-e`                                    |
 | `disable`      | `-d`                                    |
 | `ignore`       | `--ignore`                              |
+| `suppress`     | `--suppress`                            |
 | `verbosity`    | `--verbosity` *(scalar, see below)*     |
 | `only_changed` | `--only-changed` *(boolean, see below)* |
 | `globs`        | *(positional)*                          |
 
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
+
+`suppress` (blockwatch 0.5.2+) carries violation addresses, `FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]]`, and is a
+plain list like the rest — the `:` separators survive `add_args` untouched, since it splits only on commas and
+newlines. That splitting is the one limit worth knowing: an address whose file path contains a comma cannot be
+passed. Nothing is validated here, because blockwatch draws the line in both directions itself — a malformed
+address is rejected with the offending segment named (exit 2, failing the step), while a well-formed one that
+matches no violation is silently ignored, so a suppression left behind after its violation is fixed does not
+fail the run.
 
 `only_changed` is a boolean, so it does not go through `add_args` either. It arrives as a string — composite actions have no typed inputs — and a `case` maps `true`/`True`/`TRUE` to the `--only-changed` flag and `false`/`False`/`FALSE`/empty to nothing. Anything else exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
 

@@ -57,6 +57,15 @@ jobs:
           verbosity: "full"
           globs: "**/*.md"
 
+      - name: Run Blockwatch Action (Suppress)
+        uses: ./
+        with:
+          suppress: |
+            README.md
+            action.yml:some-block:keep-sorted
+          verbosity: "summary"
+          globs: "**/*.md"
+
       - name: Run Blockwatch Action (Only Changed)
         uses: ./
         with:

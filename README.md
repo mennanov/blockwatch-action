@@ -23,6 +23,7 @@ This checks every block in the repository. All inputs below are optional.
 | `only_changed`  | `"false"`   | `"true"` checks only the blocks the diff touched. See [What gets checked](#what-gets-checked) |
 | `globs`         |             | Check only files matching these patterns, e.g. `"**/*.md,**/*.yml"`                           |
 | `ignore`        |             | Skip files matching these patterns, e.g. `"target/**,dist/**"`                                |
+| `suppress`      |             | Report these violations without failing, e.g. `"docs/cli.md:cli-docs:keep-sorted"`            |
 | `enable`        |             | Run only these validators, e.g. `"keep-sorted,keep-unique"`                                   |
 | `disable`       |             | Run all validators except these, e.g. `"check-ai"`. Cannot be used with `enable`              |
 | `extensions`    |             | Treat one file extension as another, e.g. `"cxx=cpp"`                                         |
@@ -55,6 +56,25 @@ exclude.
 
 > Before blockwatch 0.4.0 this action always behaved like `only_changed: "true"`. Set it to `"true"` to keep
 > that behaviour.
+
+## Suppressing a violation
+
+`suppress` takes the address of a violation and stops it failing the run. The violation is still reported —
+only the exit code changes — so use it when a rule is wrong at one particular site and you would rather not
+edit the source or turn the validator off everywhere with `disable`:
+
+```yaml
+suppress: |
+  docs/cli.md:cli-docs:keep-sorted
+  legacy/generated.py
+```
+
+An address is `FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]]`, and the usual way to write one is to copy it out of a
+previous run's output. Every length is valid, and the shorter it is, the more it covers: `FILE` alone
+suppresses every violation in that file, which is also the only way to reach a block that has no `name`. An
+address that covers nothing is ignored; a malformed one fails the step. See
+[Suppressing a Violation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#suppressing-a-violation)
+for the full grammar.
 
 ## Seeing what ran
 
