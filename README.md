@@ -28,6 +28,7 @@ This checks every block in the repository. All inputs below are optional.
 | `disable`       |             | Run all validators except these, e.g. `"check-ai"`. Cannot be used with `enable`              |
 | `extensions`    |             | Treat one file extension as another, e.g. `"cxx=cpp"`                                         |
 | `verbosity`     | `"summary"` | `"none"`, `"summary"` (a line of counts) or `"full"` (JSON)                                   |
+| `format`        | `"json"`    | `"sarif"` reports the violations as a SARIF 2.1.0 log instead of JSON diagnostics             |
 | `diff_pathspec` |             | Extra git pathspecs for the diff, e.g. `":(exclude).github/"`                                 |
 
 Every list input takes commas or one value per line:
@@ -88,12 +89,32 @@ blockwatch: mode=all+diff, 240/240 files, 61 blocks (3 unchecked), 73 checks, 0 
 See [Run Reports](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#run-reports) for how to read
 it.
 
+## Reporting violations as SARIF
+
+`format: "sarif"` makes blockwatch write the violations as a
+[SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log instead of its JSON
+diagnostics, for code scanning and anything else that reads the format:
+
+```yaml
+- uses: mennanov/blockwatch-action@v1
+  with:
+    format: "sarif"
+```
+
+Each violation carries its address as a `partialFingerprints` entry, so a consumer can recognise the same
+violation across runs, and one named by `suppress` is marked with SARIF's own
+`"suppressions": [{"kind": "external"}]`. Unlike the JSON diagnostics, a SARIF log is written even when the
+run finds nothing, because a code-scanning service expects a log from every run.
+
 ## Known limitations
 
 - **An empty diff fails the step.** blockwatch errors on input it cannot read as a diff. That happens when
   `diff_pathspec` excludes everything a push changed, or after a force-push to an older commit. Add an `if:`
   condition if your workflow can produce one.
 - **`diff_pathspec` does not exclude files from the default run**, only from the diff. Use `ignore` for that.
+- **The SARIF log is not written to a file.** Like the JSON diagnostics it goes to stderr, which the action
+  leaves attached to the job log, so there is nothing for `github/codeql-action/upload-sarif` to pick up. Run
+  `blockwatch --format sarif 2> results.sarif` in your own step if you need to upload it.
 - **The first push of a new branch only diffs its last commit.** GitHub reports no previous tip for a new
   branch, so the action compares the head commit against its parent. Changes from earlier commits in the same
   push are not marked as changed; they get checked when you open a pull request.

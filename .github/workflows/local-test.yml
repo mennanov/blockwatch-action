@@ -57,6 +57,12 @@ jobs:
           verbosity: "full"
           globs: "**/*.md"
 
+      - name: Run Blockwatch Action (SARIF Format)
+        uses: ./
+        with:
+          format: "sarif"
+          globs: "**/*.md"
+
       - name: Run Blockwatch Action (Suppress)
         uses: ./
         with:

@@ -9,15 +9,20 @@ A single **composite GitHub Action** that installs and runs the [`blockwatch`](h
 ## Commands
 
 ```shell
-# Run the whole test workflow locally (requires `act` + Docker)
-act -W .github/workflows/local-test.yml
-
-# Simulate a specific event — the action takes a different diff path per event
-act push -W .github/workflows/local-test.yml
+# Simulate an event — the action takes a different diff path per event
+act workflow_dispatch -W .github/workflows/local-test.yml
 act pull_request -W .github/workflows/local-test.yml
+
+# push needs a payload: act synthesizes one with no `before`, so the diff comes
+# out empty and every step dies on "diff in stdin is empty." before it runs
+# blockwatch. Give it two real revisions instead.
+printf '{"before": "%s", "after": "%s"}' "$(git rev-parse HEAD~1)" "$(git rev-parse HEAD)" > /tmp/push.json
+act push -W .github/workflows/local-test.yml -e /tmp/push.json
 ```
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`). To exercise one case in isolation, temporarily comment out the others.
+The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failure — use one of the forms above.
+
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `only_changed`). To exercise one case in isolation, temporarily comment out the others.
 
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
@@ -53,6 +58,7 @@ Every list input accepts comma-separated *or* newline-separated values. The `add
 | `ignore`       | `--ignore`                              |
 | `suppress`     | `--suppress`                            |
 | `verbosity`    | `--verbosity` *(scalar, see below)*     |
+| `format`       | `--format` *(scalar, see below)*        |
 | `only_changed` | `--only-changed` *(boolean, see below)* |
 | `globs`        | *(positional)*                          |
 
@@ -69,6 +75,15 @@ fail the run.
 `only_changed` is a boolean, so it does not go through `add_args` either. It arrives as a string — composite actions have no typed inputs — and a `case` maps `true`/`True`/`TRUE` to the `--only-changed` flag and `false`/`False`/`FALSE`/empty to nothing. Anything else exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
 
 `verbosity` is the one input that does **not** go through `add_args`: it's a single clap enum (`none`/`summary`/`full`), not a list, and feeding a comma-separated value to `add_args` would emit `--verbosity` twice, which clap resolves by silently keeping the last one. It's trimmed inline instead and appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
+
+`format` (blockwatch 0.5.3+) is the other scalar enum (`json`/`sarif`) and is kept out of `add_args` for
+exactly the reason `verbosity` is — a comma in it would emit `--format` twice and clap would silently keep the
+last. `sarif` swaps the JSON diagnostics for a SARIF 2.1.0 log, and unlike them writes one even when the run
+found nothing. Both formats go to stderr, and the run step leaves stderr attached to the job log rather than
+redirecting it to a file, so `format: sarif` alone gives a caller nothing to hand to
+`github/codeql-action/upload-sarif`; the README says so under Known limitations. Adding a file output would
+mean redirecting stderr in step 7, which would also hide the JSON diagnostics from the log for everyone else,
+so it hasn't been done.
 
 `globs` are positional, so they are appended last and nothing may follow them in `BLOCKWATCH_ARGS`. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
 
