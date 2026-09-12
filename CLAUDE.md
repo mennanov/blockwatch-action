@@ -11,7 +11,11 @@ A single **composite GitHub Action** that installs and runs the [`blockwatch`](h
 ```shell
 # Simulate an event — the action takes a different diff path per event
 act workflow_dispatch -W .github/workflows/local-test.yml
-act pull_request -W .github/workflows/local-test.yml
+# pull_request also needs a payload: act synthesizes one with no base ref, so
+# the diff resolves `origin/...<sha>` and dies on "ambiguous argument". Name a
+# base that is actually behind the head, or the diff comes out empty instead.
+printf '{"pull_request": {"base": {"ref": "BASE_BRANCH"}, "head": {"ref": "main"}}}' > /tmp/pr.json
+act pull_request -W .github/workflows/local-test.yml -e /tmp/pr.json
 
 # push needs a payload: act synthesizes one with no `before`, so the diff comes
 # out empty and every step dies on "diff in stdin is empty." before it runs
@@ -22,7 +26,7 @@ act push -W .github/workflows/local-test.yml -e /tmp/push.json
 
 The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failure — use one of the forms above.
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `only_changed`). To exercise one case in isolation, temporarily comment out the others.
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `only_changed`). To exercise one case in isolation, temporarily comment out the others.
 
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
@@ -57,6 +61,7 @@ Every list input accepts comma-separated *or* newline-separated values. The `add
 | `disable`      | `-d`                                    |
 | `ignore`       | `--ignore`                              |
 | `suppress`     | `--suppress`                            |
+| `suppress_from`| `--suppress-from`                       |
 | `verbosity`    | `--verbosity` *(scalar, see below)*     |
 | `format`       | `--format` *(scalar, see below)*        |
 | `only_changed` | `--only-changed` *(boolean, see below)* |
@@ -71,6 +76,42 @@ passed. Nothing is validated here, because blockwatch draws the line in both dir
 address is rejected with the offending segment named (exit 2, failing the step), while a well-formed one that
 matches no violation is silently ignored, so a suppression left behind after its violation is fixed does not
 fail the run.
+
+`suppress_from` (blockwatch 0.5.4+) is a list of *paths* to files carrying `Blockwatch-suppress: ADDRESS`
+lines — the same addresses, read from a file rather than written into the workflow. Every other line in the
+file is ignored. It accumulates with `suppress`; neither overrides the other. Nothing is validated here
+either: an unreadable path fails the step with the path named (exit 1), which is the right outcome — an
+action that skipped a missing suppression file would fail the run on the violations instead, pointing the
+reader at the code rather than at the typo.
+
+The step also builds a suppression file of its own, unconditionally, so a suppression can travel in the
+commit that needs it. It collects the commit messages under test and, on a pull request, the description,
+and appends one more `--suppress-from` for the result; no extraction is needed, since blockwatch already
+ignores every line that isn't an address. Three details are load-bearing:
+
+- **The revision range mirrors the diff.** `BEFORE_SHA`/`CURRENT_SHA`/`ZERO_SHA` are resolved once, above
+  both this block and the diff dispatch, precisely so the two cannot drift: what is allowed to suppress a
+  violation is the same work that is being checked for one. `git log` uses two dots where the diff uses
+  three — it wants the commits a PR adds, not a patch. A new branch falls back to the head commit alone,
+  matching the diff's own coverage, and an event with no diff reads `HEAD` so that a `workflow_dispatch`
+  re-run behaves like the push that first checked that commit.
+- **The PR description is passed as `PR_BODY` in the step's `env:`, never expanded inline.** It is written
+  by whoever opened the PR, a stranger on a fork included; a `${{ github.event.pull_request.body }}`
+  anywhere inside `run:` would paste their text into the script for bash to execute. This is the one
+  expansion in the step that is attacker-controlled rather than author-controlled — every other one comes
+  from the workflow file or from git.
+- **The addresses found are echoed to the log.** A suppression from a commit message changes the exit code
+  while appearing nowhere in the workflow file. The `grep` that labels them mirrors blockwatch's own match
+  (prefix at line start, leading whitespace trimmed, case-insensitive) but decides nothing; drift there
+  mislabels a line, it does not suppress one.
+
+Two consequences worth keeping in mind, both in the README under Known limitations: anyone who can open a
+pull request can suppress a violation inside it, and a line that *starts* with `Blockwatch-suppress:` but
+carries a malformed address (too many `:` segments, or a trailing one) fails the step rather than being
+skipped. A mid-sentence mention or a `>`-quoted line is not matched, so ordinary prose is safe.
+
+The block sits before the `globs` call on purpose: globs are positional and nothing may be appended to
+`BLOCKWATCH_ARGS` after them.
 
 `only_changed` is a boolean, so it does not go through `add_args` either. It arrives as a string — composite actions have no typed inputs — and a `case` maps `true`/`True`/`TRUE` to the `--only-changed` flag and `false`/`False`/`FALSE`/empty to nothing. Anything else exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
 

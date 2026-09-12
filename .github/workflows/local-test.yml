@@ -72,6 +72,25 @@ jobs:
           verbosity: "summary"
           globs: "**/*.md"
 
+      - name: Write a suppression file
+        run: |
+          printf 'A commit subject\n\nBlockwatch-suppress: README.md\n' > "$RUNNER_TEMP/commit_msg.txt"
+
+      - name: Run Blockwatch Action (Suppress From)
+        uses: ./
+        with:
+          suppress_from: "${{ runner.temp }}/commit_msg.txt"
+          verbosity: "summary"
+          globs: "**/*.md"
+
+      - name: Run Blockwatch Action (Suppress And Suppress From)
+        uses: ./
+        with:
+          suppress: "action.yml"
+          suppress_from: "${{ runner.temp }}/commit_msg.txt"
+          verbosity: "summary"
+          globs: "**/*.md,**/*.yml"
+
       - name: Run Blockwatch Action (Only Changed)
         uses: ./
         with:

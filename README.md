@@ -18,18 +18,19 @@ This checks every block in the repository. All inputs below are optional.
 
 ## Inputs
 
-| Input           | Default     | What it does                                                                                  |
-| --------------- | ----------- | --------------------------------------------------------------------------------------------- |
-| `only_changed`  | `"false"`   | `"true"` checks only the blocks the diff touched. See [What gets checked](#what-gets-checked) |
-| `globs`         |             | Check only files matching these patterns, e.g. `"**/*.md,**/*.yml"`                           |
-| `ignore`        |             | Skip files matching these patterns, e.g. `"target/**,dist/**"`                                |
-| `suppress`      |             | Report these violations without failing, e.g. `"docs/cli.md:cli-docs:keep-sorted"`            |
-| `enable`        |             | Run only these validators, e.g. `"keep-sorted,keep-unique"`                                   |
-| `disable`       |             | Run all validators except these, e.g. `"check-ai"`. Cannot be used with `enable`              |
-| `extensions`    |             | Treat one file extension as another, e.g. `"cxx=cpp"`                                         |
-| `verbosity`     | `"summary"` | `"none"`, `"summary"` (a line of counts) or `"full"` (JSON)                                   |
-| `format`        | `"json"`    | `"sarif"` reports the violations as a SARIF 2.1.0 log instead of JSON diagnostics             |
-| `diff_pathspec` |             | Extra git pathspecs for the diff, e.g. `":(exclude).github/"`                                 |
+| Input           | Default     | What it does                                                                                                 |
+| --------------- | ----------- | ------------------------------------------------------------------------------------------------------------ |
+| `only_changed`  | `"false"`   | `"true"` checks only the blocks the diff touched. See [What gets checked](#what-gets-checked)                |
+| `globs`         |             | Check only files matching these patterns, e.g. `"**/*.md,**/*.yml"`                                          |
+| `ignore`        |             | Skip files matching these patterns, e.g. `"target/**,dist/**"`                                               |
+| `suppress`      |             | Report these violations without failing, e.g. `"docs/cli.md:cli-docs:keep-sorted"`                           |
+| `suppress_from` |             | Read extra addresses from files, e.g. `"notes.txt"`. See [Suppressing a violation](#suppressing-a-violation) |
+| `enable`        |             | Run only these validators, e.g. `"keep-sorted,keep-unique"`                                                  |
+| `disable`       |             | Run all validators except these, e.g. `"check-ai"`. Cannot be used with `enable`                             |
+| `extensions`    |             | Treat one file extension as another, e.g. `"cxx=cpp"`                                                        |
+| `verbosity`     | `"summary"` | `"none"`, `"summary"` (a line of counts) or `"full"` (JSON)                                                  |
+| `format`        | `"json"`    | `"sarif"` reports the violations as a SARIF 2.1.0 log instead of JSON diagnostics                            |
+| `diff_pathspec` |             | Extra git pathspecs for the diff, e.g. `":(exclude).github/"`                                                |
 
 Every list input takes commas or one value per line:
 
@@ -77,6 +78,45 @@ address that covers nothing is ignored; a malformed one fails the step. See
 [Suppressing a Violation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#suppressing-a-violation)
 for the full grammar.
 
+### Suppressing from a commit message or pull request description
+
+A suppression can also travel with the work that needs it, instead of being written into the workflow. The
+action always reads the commit messages under test, and on a pull request its description, for lines of the
+form:
+
+```
+Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
+```
+
+Write one in the commit that introduces the violation, or in the pull request description, and it applies to
+that run. No input is needed and nothing else in the text matters — every other line is ignored, so an
+ordinary commit message is valid input.
+
+Which messages are read follows the diff exactly, so only the work being checked can suppress anything:
+
+| Event               | Messages read                                     |
+| ------------------- | ------------------------------------------------- |
+| `pull_request`      | Every commit the PR adds, plus the PR description |
+| `push`              | Every commit the push added                       |
+| `push` (new branch) | The head commit only, as with the diff            |
+| Anything else       | The head commit only                              |
+
+A commit elsewhere in the repository cannot reach in and silence a violation. The addresses that are found
+are echoed into the job log, since a suppression coming from a commit message is otherwise invisible to
+anyone reading the workflow file.
+
+`suppress_from` adds further files to the same mechanism, for addresses that live somewhere else entirely:
+
+```yaml
+- uses: mennanov/blockwatch-action@v1
+  with:
+    suppress_from: "ci/known-violations.txt"
+```
+
+All three sources accumulate: `suppress`, `suppress_from`, and the messages. A path `suppress_from` names
+that the run cannot read fails the step, so a typo is reported rather than silently dropping the
+suppressions.
+
 ## Seeing what ran
 
 A green check means nothing failed, not that anything was checked. `verbosity: "summary"` logs one line of
@@ -112,6 +152,13 @@ run finds nothing, because a code-scanning service expects a log from every run.
   `diff_pathspec` excludes everything a push changed, or after a force-push to an older commit. Add an `if:`
   condition if your workflow can produce one.
 - **`diff_pathspec` does not exclude files from the default run**, only from the diff. Use `ignore` for that.
+- **Anyone who can open a pull request can suppress a violation in it**, by putting a `Blockwatch-suppress:`
+  line in the description or in a commit message — including someone pushing from a fork. The addresses are
+  echoed into the job log, but if that trade is wrong for your repository, require a review of the log or
+  check the blocks in a separate workflow that does not read these messages.
+- **A malformed address in a commit message fails the step.** A line beginning `Blockwatch-suppress:` whose
+  value is not a valid address (too many `:` segments, or a trailing one) is an error, not a line to skip.
+  Prose that merely mentions the prefix mid-sentence, or quotes it with `>`, is not matched and is safe.
 - **The SARIF log is not written to a file.** Like the JSON diagnostics it goes to stderr, which the action
   leaves attached to the job log, so there is nothing for `github/codeql-action/upload-sarif` to pick up. Run
   `blockwatch --format sarif 2> results.sarif` in your own step if you need to upload it.
