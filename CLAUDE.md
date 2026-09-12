@@ -58,6 +58,26 @@ The version is pinned deliberately, not resolved dynamically: bump the string in
 
 Self-hosted runners are supported but assume no Rust toolchain; the requirements they *do* have to satisfy (runner ≥ 2.327.1, glibc ≥ 2.28, git ≥ 2.18, `bash`, `curl` + `tar`/`unzip`, egress) are listed in the README. Keep those two in sync when bumping the pinned action versions.
 
+### The 21000-character ceiling
+
+The run step's script is a single GitHub *template*, because it embeds `${{ }}` expressions, and a
+template cannot exceed **21000 characters**. Over that, every run of the action dies before the first
+line executes, with `The template is not valid ... Exceeded max expression length 21000` — a parse
+error, so no amount of testing the shell logic catches it.
+
+Comments are more than half the script, so this is a live constraint whenever one is added. Measure
+before pushing:
+
+```shell
+ruby -ryaml -e 'puts YAML.load_file("action.yml")["runs"]["steps"].last["run"].length'
+```
+
+When the ceiling is reached, the long-form rationale belongs in this file and a pointer stays in the
+script; several comments there already read "See CLAUDE.md" for that reason. The structural fix, if
+it is hit repeatedly, is to move the script into a file the step calls and pass the inputs through
+`env:` — that removes every expression, and with it the template. It would also end the inline
+expansion of inputs, which is the same reasoning that already puts `PR_BODY` in `env:`.
+
 ### Input handling
 
 Every list input accepts comma-separated *or* newline-separated values. The `add_args` bash helper normalizes newlines to commas, splits on comma, trims whitespace, and appends each item to the `BLOCKWATCH_ARGS` array (an array, not a string, so values containing spaces survive). Flag mapping:

@@ -247,22 +247,11 @@ runs:
           # pull request adds, not a patch. The merge commit GitHub checks out
           # is included and harmless, its generated message carrying no address.
           git log --format=%B "origin/${{ github.base_ref }}..$CURRENT_SHA" >> "$AUTO_SUPPRESS_FILE"
-          # The description is read from the API rather than from the event
-          # payload, because the payload is a snapshot taken when the run was
-          # created. Re-running a workflow replays that snapshot, so a
-          # suppression added to the description afterwards would stay invisible
-          # until the next push — the opposite of what a re-run is for: fix the
-          # description, re-run, watch the violation stop blocking.
-          #
-          # The payload stays as the fallback and the log says which was used, so
-          # a run with no token, or a restricted one, behaves as it did before
-          # rather than silently losing every suppression the description holds.
-          #
-          # Either way the text arrives as data — through the environment or
-          # through a file, never through an expression expansion. It is written
-          # by whoever opened the request, a stranger on a fork included, and
-          # expanding it inline would paste their text into this script for bash
-          # to run.
+          # Read from the API, not from the event payload: the payload is a
+          # snapshot from when the run was created, so a re-run would replay it
+          # and miss a suppression added to the description since. The payload is
+          # the fallback when there is no usable token. Neither is ever expanded
+          # inline — the text is attacker-controlled. See CLAUDE.md.
           PR_BODY_SOURCE="the event payload"
           PR_JSON="$(mktemp)"
           PR_HTTP=""
@@ -312,34 +301,18 @@ runs:
           echo "$FOUND"
         fi
 
-        # verbosity holds one enum value (none|summary|full) rather than a list,
-        # so it does not go through add_args. A comma-separated value there would
-        # expand to --verbosity twice, and clap answers a repeated single-value
-        # flag by keeping the last occurrence — so a malformed input would be
-        # quietly acted on instead of reported.
-        #
-        # A bare token needs no more normalization than having its whitespace
-        # removed. An empty input appends nothing at all, leaving blockwatch on
-        # its own default of "none".
-        #
-        # The level is deliberately not validated here: blockwatch rejects an
-        # unknown one and prints the accepted values, which tells the reader more
-        # than this step could.
+        # A single enum (none|summary|full), so not via add_args: a comma there
+        # would emit --verbosity twice and clap silently keeps the last. Empty
+        # appends nothing; an unknown level is blockwatch's to reject.
         VERBOSITY="${{ inputs.verbosity }}"
         VERBOSITY="${VERBOSITY//[$'\n\r\t ']/}"
         if [[ -n "$VERBOSITY" ]]; then
           BLOCKWATCH_ARGS+=("--verbosity" "$VERBOSITY")
         fi
 
-        # format (blockwatch 0.5.3+) is a single enum too (json|sarif), and is
-        # kept out of add_args for the same reason verbosity is. "sarif" writes a
-        # SARIF 2.1.0 log in place of the JSON diagnostics, and writes one even
-        # when the run found nothing, since a code-scanning service expects a log
-        # from every run. Both formats go to stderr, which this step leaves
-        # attached to the job log: uploading the log to code scanning means
-        # capturing that stream in the calling workflow, not just setting this.
-        #
-        # Unknown values are left to blockwatch, which names the accepted ones.
+        # The other single enum (json|sarif), out of add_args for the reason
+        # verbosity is. Both formats go to stderr; sarif writes a log even on a
+        # clean run. Unknown values are blockwatch's to reject.
         FORMAT="${{ inputs.format }}"
         FORMAT="${FORMAT//[$'\n\r\t ']/}"
         if [[ -n "$FORMAT" ]]; then
@@ -402,22 +375,11 @@ runs:
           fi
         fi
 
-        # blockwatch already reports a violation with everything an annotation
-        # needs: a path, a 1-based range whose end column is inclusive, the
-        # validator that fired, and the address to suppress it by. These filters
-        # flatten either output format into one record per violation, so the
-        # code reading them is the same for both.
-        #
-        # Which filter to use is decided by the input rather than by inspecting
-        # the document: the JSON diagnostics are keyed by file path, so a
-        # repository holding a file named "runs" would read as a SARIF log.
-        #
-        # Fields are joined on U+001F, not tabs: a tab in IFS is whitespace, and
-        # bash folds a run of it into a single separator, so the empty address of
-        # an unnamed block would swallow its own field and shift every field
-        # after it. Newlines inside a message become U+001E for a related reason
-        # — `read` is line-based, and a multi-line message would otherwise
-        # arrive as several truncated records.
+        # One record per violation, from either output format, so the reading
+        # code below is format-agnostic. The format input picks the filter rather
+        # than the document's shape, which is ambiguous. Fields join on U+001F
+        # and newlines fold to U+001E: a tab separator is IFS whitespace and
+        # would collapse an empty address field. See CLAUDE.md for both.
         JSON_FILTER='
           to_entries[] as $file
           | $file.value[]
@@ -583,23 +545,12 @@ runs:
           # A push that creates a branch reports an all-zero "before" SHA: there
           # is no prior tip, so the head commit is diffed against the empty tree.
           if [[ "$BEFORE_SHA" == "$ZERO_SHA" ]]; then
-            # `git diff-tree`, not `git diff`. --root belongs to diff-tree, and
-            # `git diff` accepts it silently rather than rejecting it, then
-            # compares the *working tree* against the SHA — on this action's
-            # clean checkout an empty patch, letting every validator pass without
-            # examining anything.
-            #
-            # -m --first-parent is load-bearing: diff-tree prints nothing at all
-            # for a merge commit unless asked, and a newly pushed branch can
-            # perfectly well have a merge at its head.
-            #
-            # --no-commit-id drops the bare SHA line diff-tree emits ahead of the
-            # patch. It is not part of the diff format blockwatch documents as
-            # its input, so relying on it being tolerated would be a wager.
-            #
-            # Only the head commit is covered: a new branch has no base to diff
-            # its earlier commits against. Those get checked when it is opened as
-            # a pull request.
+            # `git diff-tree`, not `git diff`: --root is a diff-tree option
+            # that git diff accepts silently and then ignores, comparing the
+            # working tree instead and emitting an empty patch. -m
+            # --first-parent is what makes a merge commit emit anything;
+            # --no-commit-id drops a line blockwatch does not document as input.
+            # Only the head commit is covered here. See CLAUDE.md.
             DIFF_CMD=(git diff-tree --patch --root -m --first-parent --no-commit-id "$CURRENT_SHA")
           else
             DIFF_CMD=(git diff --patch "$BEFORE_SHA...$CURRENT_SHA")
