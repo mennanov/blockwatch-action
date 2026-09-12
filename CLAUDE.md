@@ -26,7 +26,15 @@ act push -W .github/workflows/local-test.yml -e /tmp/push.json
 
 The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failure — use one of the forms above.
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `only_changed`). To exercise one case in isolation, temporarily comment out the others.
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `only_changed`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
+
+Every case but the last group passes, which cannot exercise the reporting: a clean run
+produces no diagnostics to annotate. `testdata/annotations-fixture.bwfixture` violates
+`keep-sorted` on purpose for those, and carries an extension blockwatch does not know, so
+every other case walks past it — only the annotation cases make it visible, by passing
+`extensions: "bwfixture=md"`. They are `continue-on-error: true` because the step is
+*meant* to fail; a `git`-tracked file that failed every run would make the workflow
+useless as a smoke test. Don't "fix" that fixture.
 
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
@@ -44,7 +52,7 @@ Seven sequential steps, each with a non-obvious constraint:
 4. **Cache** `blockwatch{,.exe}` under the step-2 directory, keyed on `runner.os` + `runner.arch` + the step-3 version. `runner.arch` matters because the cache is shared across a repo's runners, so a mixed-architecture fleet would otherwise restore a binary for the wrong arch.
 5. **Install cargo-binstall** via `cargo-bins/cargo-binstall`, skipped on cache hit. The version appears **twice**, deliberately: the `uses:` ref pins the action and its install script, while the `version:` input pins the executable that script downloads. Omitting the input is not a smaller pin but a different one — the script then fetches from `releases/latest`, so a new cargo-binstall release reaches every `@v1` consumer with no change here, and only on a cache miss, which makes any resulting breakage intermittent. Dependabot bumps the `uses:` ref but not the input, so re-sync the two by hand when the grouped PR lands.
 6. **Install blockwatch** by calling `cargo-binstall`, *not* `cargo binstall` — the previous step ships binstall alone and no toolchain, so `cargo` may not exist. Passes `--disable-strategies compile`: without that, a target with no prebuilt binary would silently fall through to `cargo install`, which needs `cargo` and would just fail with a confusing "command not found" instead of a clear "no binary available".
-7. **Run** — pipes `git diff --patch` into `blockwatch "${DIFF_FLAGS[@]}"`. blockwatch's exit code is what fails the job. See [Run mode](#run-mode) for what that array holds.
+7. **Run** — pipes `git diff --patch` into `blockwatch "${DIFF_FLAGS[@]}"` at a single call site, captures its stderr, replays it to the log, and reports the violations it found as annotations. blockwatch's exit code, captured before any of the reporting runs, is what fails the job. See [Run mode](#run-mode) for what that array holds and [Reporting](#reporting) for what happens to the diagnostics.
 
 The version is pinned deliberately, not resolved dynamically: bump the string in step 3 when a new blockwatch release should be picked up. There's no Dependabot or other automation for this — it doesn't track arbitrary strings inside `action.yml`.
 
@@ -66,6 +74,10 @@ Every list input accepts comma-separated *or* newline-separated values. The `add
 | `format`       | `--format` *(scalar, see below)*        |
 | `only_changed` | `--only-changed` *(boolean, see below)* |
 | `globs`        | *(positional)*                          |
+
+`annotations`, `annotations_limit` and `summary` are the exception to that table: they are
+the action's own, do not reach blockwatch at all, and are described under
+[Reporting](#reporting).
 
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
 
@@ -113,7 +125,7 @@ skipped. A mid-sentence mention or a `>`-quoted line is not matched, so ordinary
 The block sits before the `globs` call on purpose: globs are positional and nothing may be appended to
 `BLOCKWATCH_ARGS` after them.
 
-`only_changed` is a boolean, so it does not go through `add_args` either. It arrives as a string — composite actions have no typed inputs — and a `case` maps `true`/`True`/`TRUE` to the `--only-changed` flag and `false`/`False`/`FALSE`/empty to nothing. Anything else exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
+`only_changed` is a boolean, so it does not go through `add_args` either. It arrives as a string — composite actions have no typed inputs — and the shared `parse_bool` helper maps `true`/`True`/`TRUE` to true and `false`/`False`/`FALSE`/empty to false. Anything else exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan. `annotations` and `summary` go through the same helper for the same reason — a mistyped value there would silently turn reporting off.
 
 `verbosity` is the one input that does **not** go through `add_args`: it's a single clap enum (`none`/`summary`/`full`), not a list, and feeding a comma-separated value to `add_args` would emit `--verbosity` twice, which clap resolves by silently keeping the last one. It's trimmed inline instead and appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
 
@@ -127,6 +139,56 @@ mean redirecting stderr in step 7, which would also hide the JSON diagnostics fr
 so it hasn't been done.
 
 `globs` are positional, so they are appended last and nothing may follow them in `BLOCKWATCH_ARGS`. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
+
+### Reporting
+
+blockwatch's diagnostics are a report, not just a log line, so the step reads them back and
+turns each violation into a GitHub annotation (on the line itself in a pull request) and a
+job-summary row. `annotations` (default `true`), `annotations_limit` (default 50) and
+`summary` (default `true`) control it; all three are the action's own and change nothing
+about what blockwatch checks.
+
+The mechanics, in the order they bite:
+
+- **stderr is captured to a file and replayed**, rather than streamed. Reading the
+  diagnostics requires capturing them, and the JSON a reader used to copy out of the log
+  has to stay there, so the file is `cat`-ed back after the run. The only visible cost is
+  ordering: diagnostics now print after the stdout report instead of interleaved with it.
+- **The exit code is taken before any reporting and re-raised at the end.** A composite
+  action's bash runs with `-eo pipefail`, so the run is wrapped in `set +e`/`set -e` and
+  `$STATUS` carries blockwatch's own code past the reporting to the final `exit`
+  — pipefail reports the rightmost failure, so a git failure surfaces only if blockwatch
+  somehow exited 0; an empty diff it raises as an error of its own. Reporting failures are caught with `if ! report` and
+  downgraded to a warning: the violations are in the log either way, and an annotator bug
+  must not turn a passing run into a failing one, or the reverse.
+- **Which parser runs is decided by the `format` input, never by sniffing the document.**
+  The JSON diagnostics are keyed by file path, so a repository containing a file named
+  `runs` would otherwise read as a SARIF log. Both filters emit the same 10 fields, so
+  everything downstream is format-agnostic — `format: sarif` and annotations are
+  orthogonal.
+- **Fields are joined on U+001F and newlines folded to U+001E.** A tab separator cannot be
+  used: a tab is IFS whitespace, bash collapses a run of it into one delimiter, and the
+  empty `address` of an unnamed block would swallow its field and shift every field after
+  it. `read` is line-based, so a multi-line message (`check-ai` can produce one) would
+  arrive as several truncated records without the newline placeholder.
+- **Workflow-command text is percent-encoded** the way GitHub's own toolkit does it: `%`,
+  CR and LF in the message; additionally `:` and `,` in property values, since a comma
+  starts the next property and a file path may legitimately contain one.
+- **A column range is emitted only when the violation sits on one line.** GitHub ignores
+  `col`/`endColumn` on a multi-line annotation. blockwatch's ranges are 1-based with an
+  *inclusive* end column, which is what GitHub wants; note this differs from SARIF's own
+  spec, where `endColumn` is exclusive.
+- **Suppressed violations become notices, not errors**, because they do not fail the run,
+  and the annotation carries the violation's suppression address when the block has a name
+  (unnamed blocks have no address). That address is otherwise only in the JSON.
+- **`jq` is required** and checked for before the run, so a self-hosted runner without it
+  fails with both ways out named rather than completing with annotations quietly missing.
+  It is present on every GitHub-hosted runner. The README lists it under requirements.
+
+Two caps, both in the README under Known limitations: GitHub renders only a limited number
+of annotations per step and drops the rest silently, so the step emits at most
+`annotations_limit` and says how many it left out; and the job summary is rejected outright
+above 1 MiB, so it lists at most 1000 rows and counts the remainder.
 
 ### Run mode
 
@@ -147,7 +209,18 @@ The default (`only_changed: false`) validates **every block in the repository** 
 - `push`: `${{ github.event.before }}...${{ github.sha }}`, falling back to `git diff-tree --patch --root -m --first-parent --no-commit-id <sha>` when `before` is all zeros (first push to a new branch). Every flag there is load-bearing: this was `git diff --patch --root <sha>`, but `--root` is a *diff-tree* option that `git diff` accepts silently rather than rejecting, so the command compared the working tree against `<sha>` — always a 0-byte patch on a clean checkout, making every `affects` check pass vacuously. `-m --first-parent` is what makes merge commits emit anything; without it `diff-tree` prints nothing for a merge and the empty patch returns whenever a new branch has a merge at its head. `--no-commit-id` suppresses the bare SHA line `git diff` never emits (blockwatch has tolerated it so far, but the pipeline shouldn't lean on that — it's outside the diff format blockwatch documents as its input contract). An empty-tree SHA would also work with `diff_pathspec` — contrary to what this file used to claim — but it renders `affects` useless, since a whole-tree patch marks both sides of every pair as modified. Only the head commit is covered; a new branch has no base, so earlier commits in the push are checked on the PR instead.
 - anything else: no diff exists, so the step runs a bare `blockwatch` — the same whole-tree scan as the default mode, minus the marks saying which blocks changed, and with `only_changed` inapplicable (the note says so unconditionally rather than reading the input). No `< /dev/null` guard is needed: without `--diff` blockwatch never touches stdin, so there is no descriptor to block on. This branch used to run only when `globs` was non-empty and warn otherwise, because a diff-less run with no globs checked nothing; since 0.4.0 a bare run scans the tree, so there is always real work to do. The comparison `affects` is built on still can't run here — with nothing marked as changed it has nothing to compare — though since 0.4.3 `affects` does check without a diff that every block it references still exists. If you add real support for a new event, add its branch above.
 
-`diff_pathspec` is intentionally unquoted (`-- $DIFF_PATHSPEC`) so callers can pass multiple space-separated pathspecs like `:(exclude).github/`; the `shellcheck disable=SC2086` comments mark this as deliberate.
+Each branch above builds a `DIFF_CMD` array rather than running its own pipeline; the
+single call site below it is what makes one stderr capture possible (see
+[Reporting](#reporting)). An event with no diff leaves the array empty, which is how that
+branch is recognised.
+
+`diff_pathspec` is split into an array with `read -ra`, so callers can still pass several
+space-separated pathspecs like `:(exclude).github/`. This replaced an unquoted `--
+$DIFF_PATHSPEC` at each of the six former call sites: word splitting was the point there,
+but pathname expansion came with it, so a pathspec containing a glob was matched against
+the working directory by the shell before git ever saw it. The array keeps the splitting
+and drops the globbing, which is also why the `shellcheck disable=SC2086` comments are
+gone — don't reintroduce them.
 
 ## Releasing
 

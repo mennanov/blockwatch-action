@@ -42,6 +42,18 @@ inputs:
     description: 'Validate only the blocks the diff touched ("true") instead of every block in the repository ("false", the default). No effect on events that have no diff'
     required: false
     default: 'false'
+  annotations:
+    description: 'Report each violation as a GitHub annotation ("true", the default), so it appears on the line itself in the pull request and in the check run of the job, on top of the job log. Needs "jq" on the runner'
+    required: false
+    default: 'true'
+  annotations_limit:
+    description: 'How many annotations to emit at most (default 50). GitHub renders only a limited number and drops the rest without saying so; the step reports how many it left out'
+    required: false
+    default: '50'
+  summary:
+    description: 'Write the violations to the job summary as a table ("true", the default). GitHub does not cap it the way it caps annotations, so it is where a long list stays readable'
+    required: false
+    default: 'true'
   diff_pathspec:
     description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that"
     required: false
@@ -172,6 +184,21 @@ runs:
           fi
         }
 
+        # Booleans arrive as strings, since a composite action has no typed
+        # inputs, and only the spellings GitHub itself produces are accepted.
+        # Anything else is refused rather than read as false: a mistyped value
+        # would otherwise turn off reporting, or widen a run to the whole
+        # repository, with nothing downstream to report that it had happened.
+        parse_bool() {
+          local name="$1"
+          local value="${2//[$'\n\r\t ']/}"
+          case "$value" in
+            true|True|TRUE) printf 'true' ;;
+            false|False|FALSE|'') printf 'false' ;;
+            *) echo "Error: '$name' must be \"true\" or \"false\", got '$value'." >&2; return 1 ;;
+          esac
+        }
+
         add_args "-E" "${{ inputs.extensions }}"
         add_args "-e" "${{ inputs.enable }}"
         add_args "-d" "${{ inputs.disable }}"
@@ -292,36 +319,229 @@ runs:
         # files from a run, never add one back that the mode left out.
         add_args "" "${{ inputs.globs }}"
 
-        # Every use below leaves this unquoted on purpose, so one input can carry
-        # several space-separated pathspecs (":(exclude).github/ :(exclude)docs/").
-        # The shellcheck directives mark that word-splitting as intended.
+        # Split on whitespace so one input can still carry several pathspecs
+        # (":(exclude).github/ :(exclude)docs/"). This was an unquoted expansion
+        # repeated at every git call; as an array each item stays one argument,
+        # and a pathspec holding a glob now reaches git instead of being matched
+        # against the working directory by the shell on the way.
         DIFF_PATHSPEC="${{ inputs.diff_pathspec }}"
+        DIFF_PATHSPEC_ITEMS=()
+        if [[ -n "$DIFF_PATHSPEC" ]]; then
+          read -ra DIFF_PATHSPEC_ITEMS <<< "$DIFF_PATHSPEC"
+        fi
 
         # --diff is what makes blockwatch read the piped diff at all; without it
         # stdin is ignored and the tree is scanned as if nothing had changed.
         # --only-changed then narrows the run from every block in the repository
-        # to the ones that diff touched. An unrecognized boolean is rejected
-        # rather than read as false, since nothing downstream would report it.
-        ONLY_CHANGED="${{ inputs.only_changed }}"
-        ONLY_CHANGED="${ONLY_CHANGED//[$'\n\r\t ']/}"
+        # to the ones that diff touched.
+        ONLY_CHANGED="$(parse_bool only_changed "${{ inputs.only_changed }}")"
         DIFF_FLAGS=(--diff)
-        case "$ONLY_CHANGED" in
-          true|True|TRUE) DIFF_FLAGS+=(--only-changed) ;;
-          false|False|FALSE|'') ;;
-          *) echo "Error: 'only_changed' must be \"true\" or \"false\", got '$ONLY_CHANGED'." >&2; exit 1 ;;
-        esac
+        if [[ "$ONLY_CHANGED" == "true" ]]; then
+          DIFF_FLAGS+=(--only-changed)
+        fi
 
-        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          # Three dots: diffing against the merge base shows what the PR itself
-          # changed, excluding commits the base branch gained since it forked.
-          # Two dots would attribute those to the PR.
-          # `--` keeps git from reading a pathspec as a revision name.
-          if [[ -n "$DIFF_PATHSPEC" ]]; then
-            # shellcheck disable=SC2086
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-          else
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
+        # The reporting inputs are read before anything runs, so a typo fails on
+        # its own terms instead of halfway through a lint run.
+        ANNOTATIONS="$(parse_bool annotations "${{ inputs.annotations }}")"
+        SUMMARY="$(parse_bool summary "${{ inputs.summary }}")"
+        ANNOTATIONS_LIMIT="${{ inputs.annotations_limit }}"
+        ANNOTATIONS_LIMIT="${ANNOTATIONS_LIMIT//[$'\n\r\t ']/}"
+        if [[ -z "$ANNOTATIONS_LIMIT" ]]; then
+          ANNOTATIONS_LIMIT=50
+        fi
+        if ! [[ "$ANNOTATIONS_LIMIT" =~ ^[0-9]+$ ]]; then
+          echo "Error: 'annotations_limit' must be a whole number, got '$ANNOTATIONS_LIMIT'." >&2
+          exit 1
+        fi
+        # GitHub rejects a job summary larger than 1 MiB outright, so a
+        # repository adopting blockwatch on top of thousands of existing
+        # violations would lose the table rather than have it truncated. The
+        # rows past this point are counted in a closing line instead.
+        SUMMARY_ROW_LIMIT=1000
+
+        # jq reads the diagnostics below. It is present on every GitHub-hosted
+        # runner; a self-hosted one without it fails here, naming both ways out,
+        # rather than completing with annotations silently missing.
+        if [[ "$ANNOTATIONS" == "true" || "$SUMMARY" == "true" ]]; then
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "Error: 'annotations' and 'summary' need jq to read the blockwatch diagnostics, and it is not on PATH. Install jq on the runner, or set annotations: 'false' and summary: 'false'." >&2
+            exit 1
           fi
+        fi
+
+        # blockwatch already reports a violation with everything an annotation
+        # needs: a path, a 1-based range whose end column is inclusive, the
+        # validator that fired, and the address to suppress it by. These filters
+        # flatten either output format into one record per violation, so the
+        # code reading them is the same for both.
+        #
+        # Which filter to use is decided by the input rather than by inspecting
+        # the document: the JSON diagnostics are keyed by file path, so a
+        # repository holding a file named "runs" would read as a SARIF log.
+        #
+        # Fields are joined on U+001F, not tabs: a tab in IFS is whitespace, and
+        # bash folds a run of it into a single separator, so the empty address of
+        # an unnamed block would swallow its own field and shift every field
+        # after it. Newlines inside a message become U+001E for a related reason
+        # — `read` is line-based, and a multi-line message would otherwise
+        # arrive as several truncated records.
+        JSON_FILTER='
+          to_entries[] as $file
+          | $file.value[]
+          | [ $file.key,
+              (.range.start.line // 1),
+              (.range.end.line // .range.start.line // 1),
+              (.range.start.character // 0),
+              (.range.end.character // 0),
+              (if (.suppressed // false) then "notice"
+               elif (.severity // 1) == 2 then "warning"
+               elif (.severity // 1) >= 3 then "notice"
+               else "error" end),
+              (.code // "blockwatch"),
+              (.address // ""),
+              ((.suppressed // false) | tostring),
+              ((.message // "") | gsub("\r\n"; "\n") | gsub("\n"; "\u001e")) ]
+          | map(tostring) | join("\u001f")'
+        SARIF_FILTER='
+          .runs[]? | .results[]?
+          | (.locations[0].physicalLocation // {}) as $location
+          | ($location.region // {}) as $region
+          | ((((.suppressions // []) | length) > 0)) as $suppressed
+          | [ ($location.artifactLocation.uri // ""),
+              ($region.startLine // 1),
+              ($region.endLine // $region.startLine // 1),
+              ($region.startColumn // 0),
+              ($region.endColumn // 0),
+              (if $suppressed then "notice"
+               elif .level == "warning" then "warning"
+               elif .level == "note" or .level == "none" then "notice"
+               else "error" end),
+              (.ruleId // "blockwatch"),
+              (.properties.address // ""),
+              ($suppressed | tostring),
+              ((.message.text // "") | gsub("\r\n"; "\n") | gsub("\n"; "\u001e")) ]
+          | map(tostring) | join("\u001f")'
+
+        # A workflow command is delimited text: a raw newline ends it, and a
+        # comma or colon inside a property value starts the next property.
+        # GitHub's own toolkit percent-encodes exactly these before writing one,
+        # and the runner decodes them again on the way in.
+        escape_data() {
+          local value="${1//%/%25}"
+          value="${value//$'\r'/%0D}"
+          # The placeholder the filters above folded newlines into.
+          value="${value//$'\036'/%0A}"
+          printf '%s' "$value"
+        }
+        escape_property() {
+          local value
+          value="$(escape_data "$1")"
+          value="${value//:/%3A}"
+          value="${value//,/%2C}"
+          printf '%s' "$value"
+        }
+        join_with_commas() {
+          local IFS=','
+          printf '%s' "$*"
+        }
+
+        # Reads the captured diagnostics back and reports each violation as an
+        # annotation, a job-summary row, or both. Output that is not a parseable
+        # document is left alone: a usage error ("diff in stdin is empty.", a
+        # malformed suppression address) arrives on the same stream, is already
+        # in the log verbatim, and names no line to point at.
+        report() {
+          if [[ "$ANNOTATIONS" != "true" && "$SUMMARY" != "true" ]]; then
+            return 0
+          fi
+          [[ -s "$DIAG_FILE" ]] || return 0
+          jq -e . "$DIAG_FILE" >/dev/null 2>&1 || return 0
+
+          local filter="$JSON_FILTER"
+          if [[ "$FORMAT" == "sarif" ]]; then
+            filter="$SARIF_FILTER"
+          fi
+
+          local total=0 emitted=0 omitted=0 rows=0
+          local file start_line end_line start_column end_column level code address suppressed message
+          local -a properties
+          local body location cell summary_rows
+          summary_rows="$(mktemp)"
+
+          while IFS=$'\037' read -r file start_line end_line start_column end_column level code address suppressed message; do
+            total=$((total + 1))
+
+            if [[ "$ANNOTATIONS" == "true" ]]; then
+              if (( emitted < ANNOTATIONS_LIMIT )); then
+                properties=()
+                if [[ -n "$file" ]]; then
+                  properties+=("file=$(escape_property "$file")" "line=$start_line" "endLine=$end_line")
+                  # GitHub renders a column range only within a single line and
+                  # ignores one that spans several.
+                  if [[ "$start_line" == "$end_line" && "$start_column" != "0" && "$end_column" != "0" ]]; then
+                    properties+=("col=$start_column" "endColumn=$end_column")
+                  fi
+                fi
+                properties+=("title=$(escape_property "blockwatch: $code")")
+                body="$(escape_data "$message")"
+                # The address is what a reader needs in order to act on the
+                # annotation, and it appears nowhere else on the line. A
+                # violation in an unnamed block has none, so nothing is added.
+                if [[ -n "$address" ]]; then
+                  body="${body}%0ASuppress with: Blockwatch-suppress: ${address}"
+                fi
+                echo "::${level} $(join_with_commas "${properties[@]}")::${body}"
+                emitted=$((emitted + 1))
+              else
+                omitted=$((omitted + 1))
+              fi
+            fi
+
+            if [[ "$SUMMARY" == "true" && $rows -lt $SUMMARY_ROW_LIMIT ]]; then
+              location="—"
+              if [[ -n "$file" ]]; then
+                location="${file}:${start_line}"
+              fi
+              # Markdown here, not a workflow command: a pipe would end the cell
+              # and the newline placeholder has to become a line break.
+              cell="${message//|/\|}"
+              cell="${cell//$'\036'/<br>}"
+              if [[ "$suppressed" == "true" ]]; then
+                code="${code} (suppressed)"
+              fi
+              printf '| `%s` | %s | %s | %s |\n' "$location" "$code" "$cell" "${address:-—}" >> "$summary_rows"
+              rows=$((rows + 1))
+            fi
+          done < <(jq -r "$filter" "$DIAG_FILE")
+
+          if [[ "$ANNOTATIONS" == "true" && $omitted -gt 0 ]]; then
+            echo "::notice title=blockwatch::${omitted} further violation(s) were not annotated (annotations_limit=${ANNOTATIONS_LIMIT}). All of them are in the job log above."
+          fi
+
+          if [[ "$SUMMARY" == "true" && $total -gt 0 && -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            {
+              printf '### blockwatch: %s violation(s)\n\n' "$total"
+              printf '| Location | Validator | Message | Suppress address |\n'
+              printf '| --- | --- | --- | --- |\n'
+              cat "$summary_rows"
+              if (( total > rows )); then
+                printf '\n_%s further violation(s) not listed._\n' "$((total - rows))"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          return 0
+        }
+
+        # One command per event, run in a single place below. The six variants
+        # this replaced each ended in their own `| blockwatch ...`, and the
+        # stderr capture the reporting needs has to happen exactly once.
+        DIFF_CMD=()
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          # Three dots: diffing against the merge base shows what the pull
+          # request itself changed, excluding commits the base branch gained
+          # since it forked. Two dots would attribute those to the pull request.
+          DIFF_CMD=(git diff --patch "origin/${{ github.base_ref }}...$CURRENT_SHA")
 
         elif [[ "${{ github.event_name }}" == "push" ]]; then
           # The span the push added: the branch tip beforehand, up to the new
@@ -347,25 +567,52 @@ runs:
             # Only the head commit is covered: a new branch has no base to diff
             # its earlier commits against. Those get checked when it is opened as
             # a pull request.
-            if [[ -n "$DIFF_PATHSPEC" ]]; then
-              # shellcheck disable=SC2086
-              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            else
-              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            fi
+            DIFF_CMD=(git diff-tree --patch --root -m --first-parent --no-commit-id "$CURRENT_SHA")
           else
-            if [[ -n "$DIFF_PATHSPEC" ]]; then
-              # shellcheck disable=SC2086
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            else
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            fi
+            DIFF_CMD=(git diff --patch "$BEFORE_SHA...$CURRENT_SHA")
           fi
 
         else
           echo "Note: event '${{ github.event_name }}' provides no diff, so the whole repository is scanned. Diff-driven checks (e.g. affects) cannot run, and 'only_changed' does not apply."
-          blockwatch "${BLOCKWATCH_ARGS[@]}"
         fi
+
+        # `--` keeps git from reading a pathspec as a revision name.
+        if [[ ${#DIFF_CMD[@]} -gt 0 && ${#DIFF_PATHSPEC_ITEMS[@]} -gt 0 ]]; then
+          DIFF_CMD+=(-- "${DIFF_PATHSPEC_ITEMS[@]}")
+        fi
+
+        # stderr is captured rather than streamed straight through, so the
+        # diagnostics can be read back as annotations and then replayed to the
+        # log unchanged: what a reader could previously copy out of the log is
+        # still there, after the run rather than during it.
+        DIAG_FILE="$(mktemp)"
+        set +e
+        if [[ ${#DIFF_CMD[@]} -gt 0 ]]; then
+          "${DIFF_CMD[@]}" | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}" 2>"$DIAG_FILE"
+        else
+          # Without --diff blockwatch never reads stdin, so there is no
+          # descriptor here to block on.
+          blockwatch "${BLOCKWATCH_ARGS[@]}" 2>"$DIAG_FILE"
+        fi
+        # A composite action's bash runs with pipefail, so the pipeline reports
+        # the rightmost command that failed. That is blockwatch's own code
+        # whenever it ran and failed, which includes the diff git could not
+        # produce: an empty stdin is an error it raises itself. A git failure
+        # surfaces only when blockwatch nevertheless exited 0.
+        STATUS=$?
+        set -e
+        cat "$DIAG_FILE" >&2
+
+        # Reporting must never decide the outcome: the violations are in the log
+        # above either way, so a failure to annotate them is worth a warning and
+        # nothing more.
+        if ! report; then
+          echo "::warning title=blockwatch::Could not turn the blockwatch diagnostics into annotations. They are in the job log above."
+        fi
+
+        # blockwatch's exit code is what fails the job. Everything above only
+        # changes where the violations are shown.
+        exit "$STATUS"
       shell: bash
       env:
         # Passed in rather than expanded into the script, because a pull request
