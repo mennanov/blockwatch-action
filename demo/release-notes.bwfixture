@@ -1,0 +1,18 @@
+# Release notes
+
+Demo content for the annotations preview. Every block below violates on purpose.
+
+## Version, which has drifted from the one in supported-runtimes
+
+<!-- <block name="version" same-as="demo/supported-runtimes.bwfixture:version"> -->
+0.5.4
+<!-- </block> -->
+
+## Highlights, which have outgrown their budget
+
+<!-- <block name="highlights" line-count="<=3"> -->
+- annotations on every violation
+- a job summary table
+- suppression addresses in the annotation
+- a limit on how many are emitted
+<!-- </block> -->

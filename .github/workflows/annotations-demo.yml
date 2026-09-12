@@ -1,0 +1,37 @@
+name: Annotations demo
+
+# A throwaway workflow for previewing the annotation UX on a pull request. It is
+# meant to FAIL: `demo/` holds blocks that violate on purpose, so the check turns
+# red and every violation shows up as an annotation on its own line.
+#
+# Drop this workflow and the `demo/` directory before merging.
+#
+# The demo files carry an extension blockwatch does not recognise, so the real
+# test workflow walks past them; `extensions` is what makes them visible here,
+# and keeps the two workflows from reporting each other's violations.
+
+on:
+  pull_request:
+    # `edited` is not one of the default types. Without it, adding a suppression
+    # to the pull request description would not re-run this check — and a manual
+    # re-run replays the original event payload, so the edited description would
+    # go unseen. Pushing a commit works either way.
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    name: blockwatch (demo)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Run blockwatch on the demo files
+        uses: ./
+        with:
+          extensions: "bwfixture=md"
+          globs: "demo/*.bwfixture"
+          verbosity: "summary"

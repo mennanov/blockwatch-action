@@ -1,0 +1,32 @@
+# Supported runtimes
+
+Demo content for the annotations preview. Every block below violates on purpose.
+
+## Runtimes we test against
+
+<!-- <block name="runtimes" keep-sorted> -->
+- node-24
+- node-20
+- node-22
+<!-- </block> -->
+
+## Cache keys
+
+<!-- <block name="cache-keys" keep-unique> -->
+- linux-x64
+- macos-arm64
+- linux-x64
+<!-- </block> -->
+
+## Release slugs
+
+<!-- <block name="slugs" line-pattern="^- [a-z0-9-]+$"> -->
+- first-release
+- Second Release
+<!-- </block> -->
+
+## Current version
+
+<!-- <block name="version"> -->
+0.5.5
+<!-- </block> -->
