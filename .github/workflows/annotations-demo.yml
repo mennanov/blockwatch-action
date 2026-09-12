@@ -11,12 +11,19 @@ name: Annotations demo
 # and keeps the two workflows from reporting each other's violations.
 
 on:
+  # The default activity types, deliberately: `edited` is not among them.
+  #
+  # Adding `edited` makes a description edit re-run this check, which sounds
+  # convenient and is not: the edit does not move the head SHA, so the re-run
+  # starts a *second* check run on the same commit, and the Files changed tab
+  # overlays the annotations of every check run attached to that SHA. The
+  # superseded run's failures then sit on the diff beside the new run's notices,
+  # and neither a check run nor its annotations can be deleted through the API.
+  #
+  # A push moves the SHA, so each commit carries exactly one set of annotations.
+  # To try a suppression from the description, edit it and then push anything;
+  # to keep it with the work, put it in the commit message instead.
   pull_request:
-    # `edited` is not one of the default types. Without it, adding a suppression
-    # to the pull request description would not re-run this check — and a manual
-    # re-run replays the original event payload, so the edited description would
-    # go unseen. Pushing a commit works either way.
-    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 jobs:
