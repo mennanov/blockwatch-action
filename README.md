@@ -14,25 +14,25 @@ jobs:
       - uses: mennanov/blockwatch-action@v1
 ```
 
-This checks every block in the repository. All inputs below are optional.
+By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional.
 
 ## Inputs
 
-| Input           | Default     | What it does                                                                                                 |
-| --------------- | ----------- | ------------------------------------------------------------------------------------------------------------ |
-| `only_changed`  | `"false"`   | `"true"` checks only the blocks the diff touched. See [What gets checked](#what-gets-checked)                |
-| `globs`         |             | Check only files matching these patterns, e.g. `"**/*.md,**/*.yml"`                                          |
-| `ignore`        |             | Skip files matching these patterns, e.g. `"target/**,dist/**"`                                               |
-| `suppress`      |             | Report these violations without failing, e.g. `"docs/cli.md:cli-docs:keep-sorted"`                           |
-| `suppress_from` |             | Read extra addresses from files, e.g. `"notes.txt"`. See [Suppressing a violation](#suppressing-a-violation) |
-| `enable`        |             | Run only these validators, e.g. `"keep-sorted,keep-unique"`                                                  |
-| `disable`       |             | Run all validators except these, e.g. `"check-ai"`. Cannot be used with `enable`                             |
-| `extensions`    |             | Treat one file extension as another, e.g. `"cxx=cpp"`                                                        |
-| `verbosity`     | `"summary"` | `"none"`, `"summary"` (a line of counts) or `"full"` (JSON)                                                  |
-| `format`        | `"json"`    | `"sarif"` reports the violations as a SARIF 2.1.0 log instead of JSON diagnostics                            |
-| `diff_pathspec` |             | Extra git pathspecs for the diff, e.g. `":(exclude).github/"`                                                |
+| Input | Default | Description |
+|---|---|---|
+| `only_changed` | `"false"` | Check only blocks modified in the diff. See [Diff checking and scope](#diff-checking-and-scope) |
+| `globs` | | File patterns to check (e.g. `"**/*.md,**/*.yml"`) |
+| `ignore` | | File patterns to skip (e.g. `"target/**,dist/**"`) |
+| `suppress` | | Violations to report without failing the run (e.g. `"docs/cli.md:cli-docs:keep-sorted"`) |
+| `suppress_from` | | Files containing suppression addresses. See [Suppressing violations](#suppressing-violations) |
+| `enable` | | Comma-separated validators to run (e.g. `"keep-sorted,keep-unique"`) |
+| `disable` | | Comma-separated validators to skip (cannot be used with `enable`) |
+| `extensions` | | File extension mappings, e.g. `"cxx=cpp"` |
+| `verbosity` | `"summary"` | Output verbosity: `"none"`, `"summary"` (counts), or `"full"` (JSON) |
+| `format` | `"json"` | Output format: `"json"` or `"sarif"` (SARIF 2.1.0) |
+| `diff_pathspec` | | Additional git diff pathspecs (e.g. `":(exclude).github/"`) |
 
-Every list input takes commas or one value per line:
+List inputs accept comma-separated strings or multi-line YAML:
 
 ```yaml
 ignore: |
@@ -40,153 +40,93 @@ ignore: |
   dist/**
 ```
 
-## What gets checked
+## Diff checking and scope
 
-On a `push` or `pull_request` the action builds a git diff and hands it to blockwatch. `only_changed` decides
-what that diff is used for:
+On `push` and `pull_request` events, the action generates a git diff and feeds it to blockwatch:
 
-| `only_changed`      | Blocks checked                   | What the diff does         |
-| ------------------- | -------------------------------- | -------------------------- |
-| `"false"` (default) | Every block in the repository    | Marks which blocks changed |
-| `"true"`            | Only the blocks the diff touched | Picks what to check        |
+- **Default (`only_changed: "false"`)**: Scans all blocks across the repository, using the diff to flag modified blocks. This allows cross-block validators like `affects` to verify that related blocks stay in sync.
+- **`only_changed: "true"`**: Scans only the blocks touched by the diff.
 
-`globs` and `ignore` narrow both modes. `diff_pathspec` only shapes the diff.
+`globs` and `ignore` filter which files are scanned. `diff_pathspec` only filters the diff itself. Hidden directories (like `.github/`) are scanned; only VCS directories (`.git`, `.hg`, `.jj`, `.svn`) and paths ignored by `.gitignore` or `ignore` are skipped.
 
-Hidden directories such as `.github/` are scanned like any others; only the state directories of a version
-control system (`.git`, `.hg`, `.jj`, `.svn`) are skipped, along with whatever `.gitignore` and `ignore`
-exclude.
+Events without a diff (e.g. `workflow_dispatch`, `schedule`) scan the full repository, and `only_changed` is ignored.
 
-> Before blockwatch 0.4.0 this action always behaved like `only_changed: "true"`. Set it to `"true"` to keep
-> that behaviour.
+## Suppressing violations
 
-## Suppressing a violation
+Suppressed violations are still reported in the output, but will not fail the step.
 
-`suppress` takes the address of a violation and stops it failing the run. The violation is still reported —
-only the exit code changes — so use it when a rule is wrong at one particular site and you would rather not
-edit the source or turn the validator off everywhere with `disable`:
+Addresses follow the syntax:
+```
+FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]]
+```
+Shorter addresses match more broadly. For example, `path/to/file.md` suppresses all violations in that file. You can find exact violation addresses in previous run logs. See the [blockwatch documentation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#suppressing-a-violation) for syntax details.
 
+Suppressions can come from three sources, which all combine:
+
+### 1. Action input (`suppress`)
 ```yaml
 suppress: |
   docs/cli.md:cli-docs:keep-sorted
   legacy/generated.py
 ```
 
-An address is `FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]]`, and the usual way to write one is to copy it out of a
-previous run's output. Every length is valid, and the shorter it is, the more it covers: `FILE` alone
-suppresses every violation in that file, which is also the only way to reach a block that has no `name`. An
-address that covers nothing is ignored; a malformed one fails the step. See
-[Suppressing a Violation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#suppressing-a-violation)
-for the full grammar.
-
-### Suppressing from a commit message or pull request description
-
-A suppression can also travel with the work that needs it, instead of being written into the workflow. The
-action always reads the commit messages under test, and on a pull request its description, for lines of the
-form:
-
-```
+### 2. Commit messages or PR descriptions
+Add a line to a commit message or PR description:
+```text
 Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
 ```
+The action inspects commits in the push or PR (and the PR body) for lines starting with `Blockwatch-suppress:`. Any detected suppressions are printed in the job log.
 
-Write one in the commit that introduces the violation, or in the pull request description, and it applies to
-that run. No input is needed and nothing else in the text matters — every other line is ignored, so an
-ordinary commit message is valid input.
-
-Which messages are read follows the diff exactly, so only the work being checked can suppress anything:
-
-| Event               | Messages read                                     |
-| ------------------- | ------------------------------------------------- |
-| `pull_request`      | Every commit the PR adds, plus the PR description |
-| `push`              | Every commit the push added                       |
-| `push` (new branch) | The head commit only, as with the diff            |
-| Anything else       | The head commit only                              |
-
-A commit elsewhere in the repository cannot reach in and silence a violation. The addresses that are found
-are echoed into the job log, since a suppression coming from a commit message is otherwise invisible to
-anyone reading the workflow file.
-
-`suppress_from` adds further files to the same mechanism, for addresses that live somewhere else entirely:
-
+### 3. External files (`suppress_from`)
 ```yaml
 - uses: mennanov/blockwatch-action@v1
   with:
     suppress_from: "ci/known-violations.txt"
 ```
+Files use the same format: lines starting with `Blockwatch-suppress: ADDRESS` are parsed, and all other lines are ignored.
 
-All three sources accumulate: `suppress`, `suppress_from`, and the messages. A path `suppress_from` names
-that the run cannot read fails the step, so a typo is reported rather than silently dropping the
-suppressions.
+## Verbosity and reports
 
-## Seeing what ran
+By default (`verbosity: "summary"`), blockwatch prints a one-line count to stdout:
 
-A green check means nothing failed, not that anything was checked. `verbosity: "summary"` logs one line of
-counts, and `verbosity: "full"` prints the same report as JSON:
-
-```
+```text
 blockwatch: mode=all+diff, 240/240 files, 61 blocks (3 unchecked), 73 checks, 0 violations
 ```
 
-See [Run Reports](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#run-reports) for how to read
-it.
+Use `verbosity: "full"` for JSON output, or `"none"` to silence the summary.
 
-## Reporting violations as SARIF
+## SARIF output
 
-`format: "sarif"` makes blockwatch write the violations as a
-[SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log instead of its JSON
-diagnostics, for code scanning and anything else that reads the format:
+Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log to stderr.
 
-```yaml
-- uses: mennanov/blockwatch-action@v1
-  with:
-    format: "sarif"
-```
-
-Each violation carries its address as a `partialFingerprints` entry, so a consumer can recognise the same
-violation across runs, and one named by `suppress` is marked with SARIF's own
-`"suppressions": [{"kind": "external"}]`. Unlike the JSON diagnostics, a SARIF log is written even when the
-run finds nothing, because a code-scanning service expects a log from every run.
+> **Note:** The action streams SARIF directly to the job log rather than saving it to a file, so it cannot be picked up by `github/codeql-action/upload-sarif`. If you need to upload a SARIF file to GitHub Code Scanning, invoke `blockwatch` directly in a custom step:
+> ```bash
+> blockwatch --format sarif 2> results.sarif
+> ```
 
 ## Known limitations
 
-- **An empty diff fails the step.** blockwatch errors on input it cannot read as a diff. That happens when
-  `diff_pathspec` excludes everything a push changed, or after a force-push to an older commit. Add an `if:`
-  condition if your workflow can produce one.
-- **`diff_pathspec` does not exclude files from the default run**, only from the diff. Use `ignore` for that.
-- **Anyone who can open a pull request can suppress a violation in it**, by putting a `Blockwatch-suppress:`
-  line in the description or in a commit message — including someone pushing from a fork. The addresses are
-  echoed into the job log, but if that trade is wrong for your repository, require a review of the log or
-  check the blocks in a separate workflow that does not read these messages.
-- **A malformed address in a commit message fails the step.** A line beginning `Blockwatch-suppress:` whose
-  value is not a valid address (too many `:` segments, or a trailing one) is an error, not a line to skip.
-  Prose that merely mentions the prefix mid-sentence, or quotes it with `>`, is not matched and is safe.
-- **The SARIF log is not written to a file.** Like the JSON diagnostics it goes to stderr, which the action
-  leaves attached to the job log, so there is nothing for `github/codeql-action/upload-sarif` to pick up. Run
-  `blockwatch --format sarif 2> results.sarif` in your own step if you need to upload it.
-- **The first push of a new branch only diffs its last commit.** GitHub reports no previous tip for a new
-  branch, so the action compares the head commit against its parent. Changes from earlier commits in the same
-  push are not marked as changed; they get checked when you open a pull request.
-- **Other events have no diff.** On `workflow_dispatch` or `schedule` the whole repository is still checked,
-  but a check that needs to know what changed (such as whether an `affects` target was updated alongside its
-  source) does not run, and `only_changed` is ignored. `affects` still verifies that the blocks it names
-  exist.
+- **Empty diffs fail the step**: If `diff_pathspec` excludes all changed files, or after certain force-pushes, git produces an empty diff. blockwatch treats an empty diff input as an error.
+- **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
+- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `Blockwatch-suppress:` lines. Review the job log if this is a concern for your repo.
+- **Malformed suppression syntax**: A line starting with `Blockwatch-suppress:` with invalid address syntax will fail the step.
+- **Initial push on new branch**: Because GitHub provides no previous base commit for a newly pushed branch, only the head commit is diffed against its parent. Earlier commits in that push are checked once a PR is opened.
+- **Events without diffs**: `workflow_dispatch` and `schedule` scan the full repository without diff context, so validators that depend on knowing what changed (such as `affects`) cannot check for simultaneous updates.
 
 ## Runner requirements
 
-GitHub-hosted runners work out of the box. No Rust toolchain is needed: `cargo-binstall` downloads a prebuilt
-binary instead of compiling one. A self-hosted runner needs:
+GitHub-hosted runners (`ubuntu-latest`, `macos-latest`, `windows-latest`) work out of the box. Prebuilt binaries are installed with `cargo-binstall` (no Rust toolchain needed).
 
-- **Actions Runner 2.327.1+ and glibc 2.28+** — `actions/checkout@v7` and `actions/cache@v6` need Node 24.
-  Rules out Alpine, CentOS 7 and Ubuntu 18.04.
-- **git 2.18+** — older versions make `actions/checkout` download a tarball with no `.git` directory, and the
-  action needs `git diff`.
-- **bash** — on Windows, Git Bash on `PATH`.
-- **curl, plus tar (Linux) or unzip (macOS/Windows)** — used to fetch the binary.
-- **Access to `github.com` and `crates.io`** — there is no offline install path.
-- **A writable `CARGO_HOME`** (or `CARGO_INSTALL_ROOT`, if set) — the binary is installed and cached in its
-  `bin` directory, which is added to `PATH` for the rest of the job.
+Self-hosted runners require:
+- **Actions Runner 2.327.1+ and glibc 2.28+** (Node 24 required for checkout and cache actions; Alpine, CentOS 7, and Ubuntu 18.04 are not supported)
+- **git 2.18+**
+- **bash** (Git Bash on Windows)
+- **curl**, plus **tar** (Linux) or **unzip** (macOS/Windows)
+- Network access to `github.com` and `crates.io`
+- Writable `CARGO_HOME` or `CARGO_INSTALL_ROOT`
 
 ## Running tests locally
 
 ```shell
-act -W .github/workflows/local-test.yml
+act workflow_dispatch -W .github/workflows/local-test.yml
 ```
