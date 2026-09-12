@@ -247,11 +247,44 @@ runs:
           # pull request adds, not a patch. The merge commit GitHub checks out
           # is included and harmless, its generated message carrying no address.
           git log --format=%B "origin/${{ github.base_ref }}..$CURRENT_SHA" >> "$AUTO_SUPPRESS_FILE"
-          # The description arrives through the environment, never through an
-          # expression expansion. It is written by whoever opened the request —
-          # a stranger, on a fork — and expanding it inline would paste their
-          # text into this script for bash to run.
-          printf '%s\n' "$PR_BODY" >> "$AUTO_SUPPRESS_FILE"
+          # The description is read from the API rather than from the event
+          # payload, because the payload is a snapshot taken when the run was
+          # created. Re-running a workflow replays that snapshot, so a
+          # suppression added to the description afterwards would stay invisible
+          # until the next push — the opposite of what a re-run is for: fix the
+          # description, re-run, watch the violation stop blocking.
+          #
+          # The payload stays as the fallback and the log says which was used, so
+          # a run with no token, or a restricted one, behaves as it did before
+          # rather than silently losing every suppression the description holds.
+          #
+          # Either way the text arrives as data — through the environment or
+          # through a file, never through an expression expansion. It is written
+          # by whoever opened the request, a stranger on a fork included, and
+          # expanding it inline would paste their text into this script for bash
+          # to run.
+          PR_BODY_SOURCE="the event payload"
+          PR_JSON="$(mktemp)"
+          PR_HTTP=""
+          if [[ -n "${GH_TOKEN:-}" ]] && command -v jq >/dev/null 2>&1; then
+            PR_HTTP="$(curl -sS -o "$PR_JSON" -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}" || true)"
+          fi
+          if [[ "$PR_HTTP" == "200" ]]; then
+            # `.body` is null on a description that was never written, and the
+            # alternative keeps that from landing in the file as the text "null".
+            jq -r '.body // ""' "$PR_JSON" >> "$AUTO_SUPPRESS_FILE"
+            PR_BODY_SOURCE="the API, as it reads now"
+          else
+            printf '%s\n' "$PR_BODY" >> "$AUTO_SUPPRESS_FILE"
+            if [[ -n "$PR_HTTP" ]]; then
+              PR_BODY_SOURCE="the event payload (the API answered HTTP $PR_HTTP)"
+            fi
+          fi
+          echo "Note: pull request description read from $PR_BODY_SOURCE."
         elif [[ "${{ github.event_name }}" == "push" ]]; then
           if [[ "$BEFORE_SHA" == "$ZERO_SHA" ]]; then
             # A new branch has no prior tip to enumerate from, so only the head
@@ -619,4 +652,11 @@ runs:
         # description is attacker-controlled text: `${{ github.event.pull_request.body }}`
         # written inline anywhere above would let a body ending in `"; curl ... | sh; #`
         # run commands on the runner. As a variable it is only ever data.
+        #
+        # This is the fallback now: the step prefers the description as the API
+        # reports it, so a re-run sees an edit the payload snapshot predates.
         PR_BODY: ${{ github.event.pull_request.body }}
+        # Used for one thing only, reading that description. A fork's token is
+        # read-only and a workflow may restrict it further; either way the step
+        # falls back to the payload instead of failing.
+        GH_TOKEN: ${{ github.token }}

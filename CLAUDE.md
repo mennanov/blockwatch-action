@@ -107,11 +107,19 @@ ignores every line that isn't an address. Three details are load-bearing:
   three — it wants the commits a PR adds, not a patch. A new branch falls back to the head commit alone,
   matching the diff's own coverage, and an event with no diff reads `HEAD` so that a `workflow_dispatch`
   re-run behaves like the push that first checked that commit.
-- **The PR description is passed as `PR_BODY` in the step's `env:`, never expanded inline.** It is written
-  by whoever opened the PR, a stranger on a fork included; a `${{ github.event.pull_request.body }}`
-  anywhere inside `run:` would paste their text into the script for bash to execute. This is the one
-  expansion in the step that is attacker-controlled rather than author-controlled — every other one comes
-  from the workflow file or from git.
+- **The PR description is read from the API at run time, with the event payload as the fallback.** The
+  payload is a snapshot taken when the run was created, and re-running a workflow replays it — so a
+  suppression added to the description afterwards would be invisible until the next push, which defeats
+  the obvious workflow of fixing the description and pressing Re-run. `GH_TOKEN: ${{ github.token }}` is
+  in the step's `env:` for this one read; a missing or restricted token, or any non-200, falls back to
+  `PR_BODY` rather than failing, and the log says which source was used. The cost is in the README under
+  Known limitations: an edit now takes effect without a new commit, so a suppression can arrive after a
+  review without disturbing the approval.
+- **Neither source is ever expanded inline.** The description is written by whoever opened the PR, a
+  stranger on a fork included; a `${{ github.event.pull_request.body }}` anywhere inside `run:` would
+  paste their text into the script for bash to execute. It reaches the script through the environment or
+  through a file, never through an expression — the one attacker-controlled input in the step, where
+  every other one comes from the workflow file or from git.
 - **The addresses found are echoed to the log.** A suppression from a commit message changes the exit code
   while appearing nowhere in the workflow file. The `grep` that labels them mirrors blockwatch's own match
   (prefix at line start, leading whitespace trimmed, case-insensitive) but decides nothing; drift there

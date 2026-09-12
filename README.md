@@ -80,6 +80,8 @@ Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
 ```
 The action inspects commits in the push or PR (and the PR body) for lines starting with `Blockwatch-suppress:`. Any detected suppressions are printed in the job log.
 
+The description is read from the API when the run starts, not from the event that triggered it. The two differ after an edit: a re-run replays the original event, so a description-based suppression would otherwise not take effect until the next push. Reading it live means **edit the description, press Re-run, and the violation stops blocking**. The job log names which source was used; without a usable `GITHUB_TOKEN` the action falls back to the event payload.
+
 ### 3. External files (`suppress_from`)
 ```yaml
 - uses: mennanov/blockwatch-action@v1
@@ -134,7 +136,7 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 
 - **Empty diffs fail the step**: If `diff_pathspec` excludes all changed files, or after certain force-pushes, git produces an empty diff. blockwatch treats an empty diff input as an error.
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
-- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `Blockwatch-suppress:` lines. Review the job log if this is a concern for your repo.
+- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `Blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
 - **Malformed suppression syntax**: A line starting with `Blockwatch-suppress:` with invalid address syntax will fail the step.
 - **Initial push on new branch**: Because GitHub provides no previous base commit for a newly pushed branch, only the head commit is diffed against its parent. Earlier commits in that push are checked once a PR is opened.
 - **Annotations appear inline only on changed lines**: GitHub renders an annotation in
