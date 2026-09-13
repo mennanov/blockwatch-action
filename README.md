@@ -121,7 +121,7 @@ Suppress with: Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
 
 Both formats are read, so `format` and `annotations` are independent. Set
 `annotations: "false"` and `summary: "false"` for the log-only output of earlier versions.
-Reading the diagnostics needs `jq`, which every GitHub-hosted runner already has.
+Reading the diagnostics needs Python 3, which every GitHub-hosted runner already has.
 
 ## SARIF output
 
@@ -158,7 +158,7 @@ Self-hosted runners require:
 - **git 2.18+**
 - **bash** (Git Bash on Windows)
 - **curl**, plus **tar** (Linux) or **unzip** (macOS/Windows)
-- **jq**, unless both `annotations` and `summary` are set to `"false"`
+- **Python 3.7+**, as `python3` or `python` on `PATH` — the action's logic runs there
 - Network access to `github.com` and `crates.io`
 - Writable `CARGO_HOME` or `CARGO_INSTALL_ROOT`
 
