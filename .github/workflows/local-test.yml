@@ -1,7 +1,12 @@
 name: Local Test
 
 on:
+  # A branch pushed to this repository and then opened as a pull request would
+  # otherwise run this workflow twice against the same commit — two check runs,
+  # and two of every annotation on the diff. Pushes to main still get a run of
+  # their own, and a pull request covers everything else.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -105,6 +110,10 @@ jobs:
       #
       # The fixture's extension is unknown to blockwatch, so the cases above walk
       # past it; `extensions` is what makes it visible here.
+      # Exactly one case emits an error annotation. The rest exercise their own
+      # input while emitting none, because they would otherwise stack identical
+      # cards on the fixture's one violating line — the same violation, reported
+      # once per case, on every pull request that touches the file.
       - name: Run Blockwatch Action (Annotations)
         continue-on-error: true
         uses: ./
@@ -122,14 +131,20 @@ jobs:
           annotations: "false"
           summary: "false"
 
+      # A limit of 0 exercises the cap itself: every violation is counted as
+      # omitted, so the step emits the "further violation(s)" notice and not a
+      # single file annotation. A limit of 1 against a one-violation fixture
+      # would emit the card and never reach the branch being tested.
       - name: Run Blockwatch Action (Annotations Limit)
         continue-on-error: true
         uses: ./
         with:
           extensions: "bwfixture=md"
           globs: "testdata/*.bwfixture"
-          annotations_limit: "1"
+          annotations_limit: "0"
 
+      # The SARIF filter still runs and its output still has to be well formed,
+      # but it lands in the job summary rather than as a third identical card.
       - name: Run Blockwatch Action (Annotations From SARIF)
         continue-on-error: true
         uses: ./
@@ -137,6 +152,8 @@ jobs:
           extensions: "bwfixture=md"
           globs: "testdata/*.bwfixture"
           format: "sarif"
+          annotations: "false"
+          summary: "true"
 
       # A suppressed violation is still reported, so it still gets an annotation
       # - as a notice rather than an error, since it does not fail the run.
