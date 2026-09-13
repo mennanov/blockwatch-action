@@ -11,6 +11,8 @@ Inputs arrive as INPUT_* variables, the event as GITHUB_EVENT_PATH, and nothing
 is read from the command line.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -19,28 +21,39 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator
 
-ZERO_SHA = "0" * 40
+# `from __future__ import annotations` is what lets the modern spellings below
+# (`list[str]`, `list[str] | None`) work on the oldest Python the README claims:
+# annotations are stored as strings and never evaluated at runtime.
+#
+# This alias is the exception, and the reason it is spelled `Dict` and not
+# `dict`: it is an ordinary assignment, evaluated when the module loads, and
+# `dict[str, Any]` is only subscriptable from 3.9.
+JsonObject = Dict[str, Any]
+
+ZERO_SHA: str = "0" * 40
 
 # The address prefix blockwatch reads out of commit messages and descriptions.
 # Matched here only to name them in the log; blockwatch decides what they do.
-SUPPRESS_LINE = re.compile(r"^[ \t]*blockwatch-suppress:", re.IGNORECASE)
+SUPPRESS_LINE: re.Pattern[str] = re.compile(r"^[ \t]*blockwatch-suppress:", re.IGNORECASE)
 
 # GitHub renders a limited number of annotations per step and drops the rest
 # without saying so, so the step stops at the caller's limit and reports the
 # remainder. The job summary is rejected outright above 1 MiB, hence its own cap.
-SUMMARY_ROW_LIMIT = 1000
+SUMMARY_ROW_LIMIT: int = 1000
 
 
 class Failure(Exception):
     """An input or environment problem that should fail the step by itself."""
 
 
-def env(name, default=""):
+def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default) or default
 
 
-def split_list(value):
+def split_list(value: str) -> list[str]:
     """Split a list input on commas or newlines, trimming and dropping blanks.
 
     Both spellings exist because a YAML block scalar is the readable way to
@@ -52,12 +65,12 @@ def split_list(value):
     return [item.strip() for item in value.replace("\n", ",").split(",") if item.strip()]
 
 
-def scalar(value):
+def scalar(value: str) -> str:
     """Normalize a single-token input. Whitespace is never meaningful in one."""
     return re.sub(r"\s+", "", value or "")
 
 
-def parse_bool(name, value):
+def parse_bool(name: str, value: str) -> bool:
     """Read a boolean input strictly.
 
     Composite actions have no typed inputs, so these arrive as strings. Only the
@@ -74,7 +87,7 @@ def parse_bool(name, value):
     raise Failure('%s must be "true" or "false", got %r' % (name, token))
 
 
-def parse_limit(value):
+def parse_limit(value: str) -> int:
     token = scalar(value)
     if not token:
         return 50
@@ -83,16 +96,18 @@ def parse_limit(value):
     return int(token)
 
 
-def event_payload():
+def event_payload() -> JsonObject:
     """The event that triggered this run, as the runner wrote it to disk."""
     path = env("GITHUB_EVENT_PATH")
     if not path or not os.path.exists(path):
         return {}
     try:
         with open(path, encoding="utf-8") as handle:
-            return json.load(handle)
+            payload = json.load(handle)
     except (OSError, ValueError):
         return {}
+    # A payload that is not an object would fail later, at the first .get().
+    return payload if isinstance(payload, dict) else {}
 
 
 # --------------------------------------------------------------------------
@@ -100,7 +115,7 @@ def event_payload():
 # --------------------------------------------------------------------------
 
 
-def pull_request_body(payload):
+def pull_request_body(payload: JsonObject) -> tuple[str, str]:
     """The description, read live, with the event payload as the fallback.
 
     The payload is a snapshot taken when the run was created, and re-running a
@@ -135,15 +150,16 @@ def pull_request_body(payload):
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            body = json.load(response).get("body") or ""
-        return body, "the API, as it reads now"
+            document = json.load(response)
+        body = (document.get("body") if isinstance(document, dict) else "") or ""
+        return str(body), "the API, as it reads now"
     except urllib.error.HTTPError as error:
         return snapshot, "the event payload (the API answered HTTP %s)" % error.code
     except Exception as error:  # network, DNS, timeout, malformed JSON
         return snapshot, "the event payload (the API read failed: %s)" % error
 
 
-def git_log_messages(event_name, payload, current_sha):
+def git_log_messages(event_name: str, payload: JsonObject, current_sha: str) -> list[str]:
     """The commit messages this run is allowed to read suppressions from.
 
     The range mirrors the diff below exactly, so only the work being checked can
@@ -169,7 +185,7 @@ def git_log_messages(event_name, payload, current_sha):
     return ["git", "log", "-1", "--format=%B", "HEAD"]
 
 
-def write_suppression_file(event_name, payload, current_sha):
+def write_suppression_file(event_name: str, payload: JsonObject, current_sha: str) -> str:
     """Collect the commit messages, and any description, into one file.
 
     blockwatch reads `Blockwatch-suppress: ADDRESS` lines out of any text and
@@ -210,7 +226,7 @@ def write_suppression_file(event_name, payload, current_sha):
 # --------------------------------------------------------------------------
 
 
-def blockwatch_args(suppression_file):
+def blockwatch_args(suppression_file: str) -> list[str]:
     """Everything after `blockwatch`, in the order blockwatch needs it."""
     args = []
     for flag, value in (
@@ -247,7 +263,7 @@ def blockwatch_args(suppression_file):
     return args
 
 
-def diff_command(event_name, payload, current_sha):
+def diff_command(event_name: str, payload: JsonObject, current_sha: str) -> list[str] | None:
     """The diff for this event, or None for an event that has none."""
     pathspec = env("INPUT_DIFF_PATHSPEC").split()
 
@@ -298,7 +314,9 @@ def diff_command(event_name, payload, current_sha):
     return command
 
 
-def run_blockwatch(command, args, only_changed):
+def run_blockwatch(
+    command: list[str] | None, args: list[str], only_changed: bool
+) -> tuple[int, str]:
     """Run blockwatch, returning its exit code and its captured diagnostics.
 
     stderr is captured rather than streamed so the diagnostics can be read back
@@ -332,30 +350,31 @@ def run_blockwatch(command, args, only_changed):
 # --------------------------------------------------------------------------
 
 
-class Violation(object):
+@dataclass
+class Violation:
     """One reported violation, in whichever format blockwatch wrote it."""
 
-    def __init__(self, path, start_line, end_line, start_column, end_column,
-                 level, code, address, suppressed, message):
-        self.path = path
-        self.start_line = start_line
-        self.end_line = end_line
-        self.start_column = start_column
-        self.end_column = end_column
-        self.level = level
-        self.code = code
-        self.address = address
-        self.suppressed = suppressed
-        self.message = message
+    path: str
+    start_line: int
+    end_line: int
+    start_column: int
+    end_column: int
+    level: str
+    code: str
+    address: str
+    suppressed: bool
+    message: str
 
     @property
-    def single_line(self):
+    def single_line(self) -> bool:
         # GitHub renders a column range only within one line and ignores one
-        # that spans several.
-        return self.start_line == self.end_line and self.start_column and self.end_column
+        # that spans several. Column 0 means blockwatch reported no column.
+        return bool(
+            self.start_line == self.end_line and self.start_column and self.end_column
+        )
 
 
-def level_for(suppressed, severity):
+def level_for(suppressed: bool, severity: int | None) -> str:
     # A suppressed violation does not fail the run, so it is a notice rather
     # than an error. blockwatch's severities follow LSP: 1 error, 2 warning,
     # 3 information, 4 hint.
@@ -368,7 +387,7 @@ def level_for(suppressed, severity):
     return "error"
 
 
-def parse_json_diagnostics(document):
+def parse_json_diagnostics(document: JsonObject) -> Iterator[Violation]:
     """blockwatch's default output: one object of diagnostics, keyed by file."""
     for path, entries in document.items():
         for entry in entries:
@@ -390,7 +409,7 @@ def parse_json_diagnostics(document):
             )
 
 
-def parse_sarif(document):
+def parse_sarif(document: JsonObject) -> Iterator[Violation]:
     """The same violations, as a SARIF 2.1.0 log."""
     for run in document.get("runs") or []:
         for result in run.get("results") or []:
@@ -415,7 +434,7 @@ def parse_sarif(document):
             )
 
 
-def parse_diagnostics(text, output_format):
+def parse_diagnostics(text: str, output_format: str) -> list[Violation]:
     """Read the captured diagnostics, or give up quietly.
 
     Output that is not a parseable document is left alone: a usage error
@@ -439,7 +458,7 @@ def parse_diagnostics(text, output_format):
     return list(parse_json_diagnostics(document))
 
 
-def escape_data(value):
+def escape_data(value: str) -> str:
     """Percent-encode a workflow command's message.
 
     A command is delimited text: a raw newline would end it. GitHub's own
@@ -448,12 +467,12 @@ def escape_data(value):
     return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def escape_property(value):
+def escape_property(value: str) -> str:
     """The same, plus the separators between properties."""
     return escape_data(value).replace(":", "%3A").replace(",", "%2C")
 
 
-def emit_annotations(violations, limit):
+def emit_annotations(violations: list[Violation], limit: int) -> None:
     emitted = 0
     omitted = 0
     for violation in violations:
@@ -489,7 +508,7 @@ def emit_annotations(violations, limit):
         )
 
 
-def write_summary(violations):
+def write_summary(violations: list[Violation]) -> None:
     path = env("GITHUB_STEP_SUMMARY")
     if not path or not violations:
         return
@@ -518,7 +537,7 @@ def write_summary(violations):
 # --------------------------------------------------------------------------
 
 
-def main():
+def main() -> int:
     try:
         annotations = parse_bool("annotations", env("INPUT_ANNOTATIONS"))
         summary = parse_bool("summary", env("INPUT_SUMMARY"))

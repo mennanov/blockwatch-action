@@ -46,6 +46,17 @@ emits only the "further violation(s)" notice; the SARIF case runs its filter int
 with `annotations: "false"`. Adding a case that annotates adds a card to every pull request that
 touches the fixture.
 
+`scripts/run.py` is fully annotated and passes `mypy --strict`. Keep it that way — the script has
+no test suite of its own, so the type checker is the only automated check on it:
+
+```shell
+mypy --strict scripts/run.py
+```
+
+Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
+import annotations` keeps lazy, so they cost nothing at runtime on an older interpreter. The one
+alias that *is* evaluated, `JsonObject`, is spelled with `typing.Dict` for that reason.
+
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
 ```shell
