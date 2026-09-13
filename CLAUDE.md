@@ -36,6 +36,16 @@ every other case walks past it — only the annotation cases make it visible, by
 *meant* to fail; a `git`-tracked file that failed every run would make the workflow
 useless as a smoke test. Don't "fix" that fixture.
 
+Only **one** of those cases emits an error annotation, and that is deliberate. They all point at
+the same fixture, so each case that annotates puts an identical card on its single violating line —
+and the workflow used to run twice per pull request (`push` *and* `pull_request`, for a branch in
+this repository), doubling that again: eight cards on one line. The trigger is now
+`push: branches: [main]`, and the other cases exercise their input while emitting nothing.
+`annotations_limit: "0"` counts every violation as omitted, which reaches the cap's own branch and
+emits only the "further violation(s)" notice; the SARIF case runs its filter into the job summary
+with `annotations: "false"`. Adding a case that annotates adds a card to every pull request that
+touches the fixture.
+
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
 ```shell
