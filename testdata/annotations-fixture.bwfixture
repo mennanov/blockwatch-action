@@ -1,0 +1,14 @@
+This file violates keep-sorted on purpose. `.github/workflows/local-test.yml` runs the
+action against it to exercise the annotation output, which the cases that pass cannot
+show: a clean run emits no diagnostics to turn into annotations.
+
+The extension is one blockwatch does not recognise, so every other case in that workflow
+walks straight past this file. The annotation cases map it with `extensions:
+"bwfixture=md"` to make it visible, and mark themselves `continue-on-error` because a
+reported violation is the point.
+
+<!-- <block name="out-of-order" keep-sorted> -->
+- banana
+- apple
+- cherry
+<!-- </block> -->

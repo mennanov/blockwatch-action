@@ -30,6 +30,9 @@ By default, this checks every block in the repository and uses the git diff to i
 | `extensions` | | File extension mappings, e.g. `"cxx=cpp"` |
 | `verbosity` | `"summary"` | Output verbosity: `"none"`, `"summary"` (counts), or `"full"` (JSON) |
 | `format` | `"json"` | Output format: `"json"` or `"sarif"` (SARIF 2.1.0) |
+| `annotations` | `"true"` | Report each violation as a GitHub annotation. See [Annotations](#annotations) |
+| `annotations_limit` | `50` | How many annotations to emit at most |
+| `summary` | `"true"` | Write the violations to the job summary as a table |
 | `diff_pathspec` | | Additional git diff pathspecs (e.g. `":(exclude).github/"`) |
 
 List inputs accept comma-separated strings or multi-line YAML:
@@ -77,6 +80,8 @@ Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
 ```
 The action inspects commits in the push or PR (and the PR body) for lines starting with `Blockwatch-suppress:`. Any detected suppressions are printed in the job log.
 
+The description is read from the API when the run starts, not from the event that triggered it. The two differ after an edit: a re-run replays the original event, so a description-based suppression would otherwise not take effect until the next push. Reading it live means **edit the description, press Re-run, and the violation stops blocking**. The job log names which source was used; without a usable `GITHUB_TOKEN` the action falls back to the event payload.
+
 ### 3. External files (`suppress_from`)
 ```yaml
 - uses: mennanov/blockwatch-action@v1
@@ -95,6 +100,29 @@ blockwatch: mode=all+diff, 240/240 files, 61 blocks (3 unchecked), 73 checks, 0 
 
 Use `verbosity: "full"` for JSON output, or `"none"` to silence the summary.
 
+## Annotations
+
+Violations are reported as GitHub annotations as well as in the log, so each one appears
+on the line it refers to in the pull request, and in the check run for the job:
+
+```text
+::error file=docs/cli.md,line=12,endLine=12,col=1,endColumn=40,title=blockwatch: keep-sorted::Block docs/cli.md:cli-docs defined at line 9 has an out-of-order line 12 (asc)
+Suppress with: Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
+```
+
+- A violation that fails the run is an **error**; a [suppressed](#suppressing-violations)
+  one is a **notice**, because it does not.
+- Blocks that are named carry their suppression address into the annotation, ready to
+  copy into a commit message or the `suppress` input.
+- The same violations are written to the **job summary** as a table. GitHub caps how many
+  annotations it renders but does not cap the summary, so the table is where a long list
+  stays complete.
+- The JSON (or SARIF) diagnostics stay in the job log either way.
+
+Both formats are read, so `format` and `annotations` are independent. Set
+`annotations: "false"` and `summary: "false"` for the log-only output of earlier versions.
+Reading the diagnostics needs Python 3, which every GitHub-hosted runner already has.
+
 ## SARIF output
 
 Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log to stderr.
@@ -108,9 +136,17 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 
 - **Empty diffs fail the step**: If `diff_pathspec` excludes all changed files, or after certain force-pushes, git produces an empty diff. blockwatch treats an empty diff input as an error.
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
-- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `Blockwatch-suppress:` lines. Review the job log if this is a concern for your repo.
+- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `Blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
 - **Malformed suppression syntax**: A line starting with `Blockwatch-suppress:` with invalid address syntax will fail the step.
 - **Initial push on new branch**: Because GitHub provides no previous base commit for a newly pushed branch, only the head commit is diffed against its parent. Earlier commits in that push are checked once a PR is opened.
+- **Annotations appear inline only on changed lines**: GitHub renders an annotation in
+  the *Files changed* tab only where the pull request touches that line. In the default
+  mode (`only_changed: "false"`) the whole repository is checked, so a violation in a file
+  the pull request never touched is reported in the check run and the job summary, but has
+  no line in the diff to appear on.
+- **Annotations are capped**: GitHub renders a limited number of annotations per step and
+  drops the rest without saying so, so the action emits at most `annotations_limit` (50 by
+  default) and reports how many it left out. The job summary lists up to 1000 of them.
 - **Events without diffs**: `workflow_dispatch` and `schedule` scan the full repository without diff context, so validators that depend on knowing what changed (such as `affects`) cannot check for simultaneous updates.
 
 ## Runner requirements
@@ -122,6 +158,7 @@ Self-hosted runners require:
 - **git 2.18+**
 - **bash** (Git Bash on Windows)
 - **curl**, plus **tar** (Linux) or **unzip** (macOS/Windows)
+- **Python 3.7+**, as `python3` or `python` on `PATH` — the action's logic runs there
 - Network access to `github.com` and `crates.io`
 - Writable `CARGO_HOME` or `CARGO_INSTALL_ROOT`
 

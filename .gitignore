@@ -13,3 +13,7 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Byte-compiled files from running scripts/run.py locally
+__pycache__/
+*.pyc

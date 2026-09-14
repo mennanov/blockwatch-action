@@ -1,0 +1,36 @@
+name: Checks
+
+on:
+  # A branch pushed here and then opened as a pull request would otherwise be
+  # checked twice against the same commit.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    name: Pre-commit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The test hook drives the real blockwatch binary, and the action is what
+      # knows which version to install — running it here keeps that version in
+      # one place. Reporting is off so this adds no annotations of its own.
+      - name: Install blockwatch
+        uses: ./
+        with:
+          verbosity: "none"
+          annotations: "false"
+          summary: "false"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+
+      # Runs the same three hooks as a local commit, over every file.
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
