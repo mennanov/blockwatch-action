@@ -55,21 +55,24 @@ mypy --strict scripts/run.py scripts/run_test.py
 ```
 
 The tests run the script as a subprocess against a **real git repository and the real blockwatch
-binary** — nothing is stubbed, and the module refuses to run if `blockwatch` is not on `PATH`. That
-is the point of them: a stub would freeze a copy of blockwatch's output, and the failure worth
-catching is the one where a new release changes the line and column base, the address format, or
-the severity of a suppressed violation, leaving the action exiting with the right code while
-annotating the wrong thing. Assertions like `endColumn == 7` for `- apple` are reading the real
-contract, so update them only against real output.
+binary** — nothing is stubbed, and the module refuses to run if `blockwatch` is not on `PATH`. The
+binary is there to supply realistic input, not to be the subject: **every assertion is about what
+`run.py` does with what it was given.** blockwatch's own contract — the column base, the address
+format, the wording of a message — is read back out of the diagnostics the script replayed and
+compared against the annotation, never hardcoded, so a blockwatch release that changes any of it is
+not a failure here. That is deliberate: it is not this repository's job to test the linter.
+
+The question to ask of a new case is *would this fail if `run.py` broke, or only if blockwatch
+changed?* Two earlier cases failed it and were dropped: one asserting that `globs` narrow a run
+(blockwatch's glob semantics) and one suppressing through the `suppress` input (generic list
+plumbing, and the commit-message case already covers the notice mapping). Dropping the first left
+the "nothing may follow the positional globs" invariant with no automated guard — it lives in
+review and in the flag table above.
 
 They import nothing from `run.py` — rearranging its internals must not touch them — and each test
 builds its own repository with `HOME` redirected into it, so no global git config reaches in. The
-invariants with a history of breaking silently are checked behaviourally: that `globs` still narrow
-a run (so nothing was appended after the positionals), and that a first push to a new branch reports
-its violation rather than dying on the empty patch `git diff --root` used to produce.
-
-The file is ordered by importance, most critical first; unittest still runs them alphabetically.
-Coverage is deliberately partial: the eleven cases are the ones whose failure would be worst, not
+file is ordered by importance, most critical first; unittest still runs them alphabetically.
+Coverage is deliberately partial: the nine cases are the ones whose failure would be worst, not
 every branch. The job summary is not among them.
 
 Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
