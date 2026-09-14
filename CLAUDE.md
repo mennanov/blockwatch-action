@@ -46,6 +46,39 @@ emits only the "further violation(s)" notice; the SARIF case runs its filter int
 with `annotations: "false"`. Adding a case that annotates adds a card to every pull request that
 touches the fixture.
 
+`scripts/run.py` has black-box tests in [`scripts/run_test.py`](scripts/run_test.py) and is fully
+annotated for Pyrefly. Both are fast, and the [pre-commit hooks](#the-pre-commit-hooks) run them:
+
+```shell
+python3 scripts/run_test.py     # or: python3 -m pytest scripts/run_test.py
+pyrefly check                   # preset and disabled codes come from pyproject.toml
+```
+
+The tests run the script as a subprocess against a **real git repository and the real blockwatch
+binary** — nothing is stubbed, and the module refuses to run if `blockwatch` is not on `PATH`. The
+binary is there to supply realistic input, not to be the subject: **every assertion is about what
+`run.py` does with what it was given.** blockwatch's own contract — the column base, the address
+format, the wording of a message — is read back out of the diagnostics the script replayed and
+compared against the annotation, never hardcoded, so a blockwatch release that changes any of it is
+not a failure here. That is deliberate: it is not this repository's job to test the linter.
+
+The question to ask of a new case is *would this fail if `run.py` broke, or only if blockwatch
+changed?* Two earlier cases failed it and were dropped: one asserting that `globs` narrow a run
+(blockwatch's glob semantics) and one suppressing through the `suppress` input (generic list
+plumbing, and the commit-message case already covers the notice mapping). Dropping the first left
+the "nothing may follow the positional globs" invariant with no automated guard — it lives in
+review and in the flag table above.
+
+They import nothing from `run.py` — rearranging its internals must not touch them — and each test
+builds its own repository with `HOME` redirected into it, so no global git config reaches in. The
+file is ordered by importance, most critical first; unittest still runs them alphabetically.
+Coverage is deliberately partial: the nine cases are the ones whose failure would be worst, not
+every branch. The job summary is not among them.
+
+Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
+import annotations` keeps lazy, so they cost nothing at runtime on an older interpreter. The one
+alias that *is* evaluated, `JsonObject`, is spelled with `typing.Dict` for that reason.
+
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
 ```shell
