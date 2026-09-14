@@ -42,6 +42,18 @@ inputs:
     description: 'Validate only the blocks the diff touched ("true") instead of every block in the repository ("false", the default). No effect on events that have no diff'
     required: false
     default: 'false'
+  annotations:
+    description: 'Report each violation as a GitHub annotation ("true", the default), so it appears on the line itself in the pull request and in the check run of the job, on top of the job log. Needs "jq" on the runner'
+    required: false
+    default: 'true'
+  annotations_limit:
+    description: 'How many annotations to emit at most (default 50). GitHub renders only a limited number and drops the rest without saying so; the step reports how many it left out'
+    required: false
+    default: '50'
+  summary:
+    description: 'Write the violations to the job summary as a table ("true", the default). GitHub does not cap it the way it caps annotations, so it is where a long list stays readable'
+    required: false
+    default: 'true'
   diff_pathspec:
     description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that"
     required: false
@@ -169,4 +181,7 @@ runs:
         INPUT_VERBOSITY: ${{ inputs.verbosity }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_ONLY_CHANGED: ${{ inputs.only_changed }}
+        INPUT_ANNOTATIONS: ${{ inputs.annotations }}
+        INPUT_ANNOTATIONS_LIMIT: ${{ inputs.annotations_limit }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
         INPUT_DIFF_PATHSPEC: ${{ inputs.diff_pathspec }}

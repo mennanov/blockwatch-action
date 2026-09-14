@@ -26,7 +26,25 @@ act push -W .github/workflows/local-test.yml -e /tmp/push.json
 
 The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failure — use one of the forms above.
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from` and `only_changed`). To exercise one case in isolation, temporarily comment out the others.
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `only_changed`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
+
+Every case but the last group passes, which cannot exercise the reporting: a clean run
+produces no diagnostics to annotate. `testdata/annotations-fixture.bwfixture` violates
+`keep-sorted` on purpose for those, and carries an extension blockwatch does not know, so
+every other case walks past it — only the annotation cases make it visible, by passing
+`extensions: "bwfixture=md"`. They are `continue-on-error: true` because the step is
+*meant* to fail; a `git`-tracked file that failed every run would make the workflow
+useless as a smoke test. Don't "fix" that fixture.
+
+Only **one** of those cases emits an error annotation, and that is deliberate. They all point at
+the same fixture, so each case that annotates puts an identical card on its single violating line —
+and the workflow used to run twice per pull request (`push` *and* `pull_request`, for a branch in
+this repository), doubling that again: eight cards on one line. The trigger is now
+`push: branches: [main]`, and the other cases exercise their input while emitting nothing.
+`annotations_limit: "0"` counts every violation as omitted, which reaches the cap's own branch and
+emits only the "further violation(s)" notice; the SARIF case runs its filter into the job summary
+with `annotations: "false"`. Adding a case that annotates adds a card to every pull request that
+touches the fixture.
 
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
@@ -44,7 +62,7 @@ Seven sequential steps, each with a non-obvious constraint:
 4. **Cache** `blockwatch{,.exe}` under the step-2 directory, keyed on `runner.os` + `runner.arch` + the step-3 version. `runner.arch` matters because the cache is shared across a repo's runners, so a mixed-architecture fleet would otherwise restore a binary for the wrong arch.
 5. **Install cargo-binstall** via `cargo-bins/cargo-binstall`, skipped on cache hit. The version appears **twice**, deliberately: the `uses:` ref pins the action and its install script, while the `version:` input pins the executable that script downloads. Omitting the input is not a smaller pin but a different one — the script then fetches from `releases/latest`, so a new cargo-binstall release reaches every `@v1` consumer with no change here, and only on a cache miss, which makes any resulting breakage intermittent. Dependabot bumps the `uses:` ref but not the input, so re-sync the two by hand when the grouped PR lands.
 6. **Install blockwatch** by calling `cargo-binstall`, *not* `cargo binstall` — the previous step ships binstall alone and no toolchain, so `cargo` may not exist. Passes `--disable-strategies compile`: without that, a target with no prebuilt binary would silently fall through to `cargo install`, which needs `cargo` and would just fail with a confusing "command not found" instead of a clear "no binary available".
-7. **Run** — a five-line wrapper that picks an interpreter and calls `scripts/run.py`. The script builds blockwatch's arguments, assembles the suppression sources, produces the diff for this event and pipes it into blockwatch, whose exit code is what fails the job. See [Run mode](#run-mode).
+7. **Run** — a five-line wrapper that picks an interpreter and calls `scripts/run.py`. The script builds blockwatch's arguments, assembles the suppression sources, produces the diff for this event, pipes it into blockwatch, captures its stderr, replays it to the log, and reports the violations as annotations and a job-summary table. blockwatch's exit code, taken before any reporting runs, is what fails the job. See [Run mode](#run-mode) and [Reporting](#reporting).
 
 The version is pinned deliberately, not resolved dynamically: bump the string in step 3 when a new blockwatch release should be picked up. There's no Dependabot or other automation for this — it doesn't track arbitrary strings inside `action.yml`.
 
@@ -90,6 +108,10 @@ Every list input accepts comma-separated *or* newline-separated values. `split_l
 | `format`       | `--format` *(scalar, see below)*        |
 | `only_changed` | `--only-changed` *(boolean, see below)* |
 | `globs`        | *(positional)*                          |
+
+`annotations`, `annotations_limit` and `summary` are the exception to that table: they are
+the action's own, do not reach blockwatch at all, and are described under
+[Reporting](#reporting).
 
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
 
@@ -137,7 +159,7 @@ skipped. A mid-sentence mention or a `>`-quoted line is not matched, so ordinary
 The block sits before the `globs` call on purpose: globs are positional and nothing may be appended to
 the argument list after them.
 
-`only_changed` is a boolean, so it does not go through `split_list` either. It arrives as a string — composite actions have no typed inputs — and `parse_bool` accepts `true`/`True`/`TRUE` and `false`/`False`/`FALSE`/empty. Anything else raises and exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
+`only_changed` is a boolean, so it does not go through `split_list` either. It arrives as a string — composite actions have no typed inputs — and `parse_bool` accepts `true`/`True`/`TRUE` and `false`/`False`/`FALSE`/empty. Anything else raises and exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan. `annotations` and `summary` use the same helper for the same reason — a mistyped value there would silently turn reporting off.
 
 `verbosity` is the one input that does **not** go through `split_list`: it's a single clap enum (`none`/`summary`/`full`), not a list, and splitting a comma-separated value would emit `--verbosity` twice, which clap resolves by silently keeping the last one. `scalar` strips its whitespace instead, and it is appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
 
@@ -151,6 +173,55 @@ mean redirecting stderr in step 7, which would also hide the JSON diagnostics fr
 so it hasn't been done.
 
 `globs` are positional, so they are appended last and nothing may follow them in the argument list. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
+
+### Reporting
+
+blockwatch's diagnostics are a report, not just a log line, so the step reads them back and
+turns each violation into a GitHub annotation (on the line itself in a pull request) and a
+job-summary row. `annotations` (default `true`), `annotations_limit` (default 50) and
+`summary` (default `true`) control it; all three are the action's own and change nothing
+about what blockwatch checks.
+
+The mechanics, in the order they bite:
+
+- **stderr is captured to a file and replayed**, rather than streamed. Reading the
+  diagnostics requires capturing them, and the JSON a reader used to copy out of the log
+  has to stay there, so the file is `cat`-ed back after the run. The only visible cost is
+  ordering: diagnostics now print after the stdout report instead of interleaved with it.
+- **The exit code is taken before any reporting and re-raised at the end.** A composite
+  action's bash runs with `-eo pipefail`, so the run is wrapped in `set +e`/`set -e` and
+  `$STATUS` carries blockwatch's own code past the reporting to the final `exit`
+  — pipefail reports the rightmost failure, so a git failure surfaces only if blockwatch
+  somehow exited 0; an empty diff it raises as an error of its own. Reporting failures are caught with `if ! report` and
+  downgraded to a warning: the violations are in the log either way, and an annotator bug
+  must not turn a passing run into a failing one, or the reverse.
+- **Which parser runs is decided by the `format` input, never by sniffing the document.**
+  The JSON diagnostics are keyed by file path, so a repository containing a file named
+  `runs` would otherwise read as a SARIF log. Both filters emit the same 10 fields, so
+  everything downstream is format-agnostic — `format: sarif` and annotations are
+  orthogonal.
+- **The diagnostics are parsed with `json`, into `Violation` objects.** The shell version
+  had to flatten them through a delimited text stream, which needed U+001F separators and a
+  newline placeholder to survive `read`; none of that exists any more. A multi-line message
+  (`check-ai` produces them) is now simply a string.
+- **Workflow-command text is percent-encoded** the way GitHub's own toolkit does it: `%`,
+  CR and LF in the message; additionally `:` and `,` in property values, since a comma
+  starts the next property and a file path may legitimately contain one.
+- **A column range is emitted only when the violation sits on one line.** GitHub ignores
+  `col`/`endColumn` on a multi-line annotation. blockwatch's ranges are 1-based with an
+  *inclusive* end column, which is what GitHub wants; note this differs from SARIF's own
+  spec, where `endColumn` is exclusive.
+- **Suppressed violations become notices, not errors**, because they do not fail the run,
+  and the annotation carries the violation's suppression address when the block has a name
+  (unnamed blocks have no address). That address is otherwise only in the JSON.
+- **Python 3 is the only runtime requirement** the reporting adds, and the wrapper prefers
+  `python3`, falling back to `python` for Git Bash on the Windows runners. `jq` and `curl`
+  are not used by this step at all any more. The README lists it under requirements.
+
+Two caps, both in the README under Known limitations: GitHub renders only a limited number
+of annotations per step and drops the rest silently, so the step emits at most
+`annotations_limit` and says how many it left out; and the job summary is rejected outright
+above 1 MiB, so it lists at most 1000 rows and counts the remainder.
 
 ### Run mode
 

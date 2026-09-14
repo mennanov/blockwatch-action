@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run blockwatch over the diff for this event.
+"""Run blockwatch over the diff for this event and report what it found.
 
 This is the whole of the action's seventh step. It lived inline in `action.yml`
 until the script outgrew GitHub's 21000-character template limit, which a `run:`
@@ -19,7 +19,8 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator
 
 # `from __future__ import annotations` is what lets the modern spellings below
 # (`list[str]`, `list[str] | None`) work on the oldest Python the README claims:
@@ -35,6 +36,11 @@ ZERO_SHA: str = "0" * 40
 # The address prefix blockwatch reads out of commit messages and descriptions.
 # Matched here only to name them in the log; blockwatch decides what they do.
 SUPPRESS_LINE: re.Pattern[str] = re.compile(r"^[ \t]*blockwatch-suppress:", re.IGNORECASE)
+
+# GitHub renders a limited number of annotations per step and drops the rest
+# without saying so, so the step stops at the caller's limit and reports the
+# remainder. The job summary is rejected outright above 1 MiB, hence its own cap.
+SUMMARY_ROW_LIMIT: int = 1000
 
 
 class Failure(Exception):
@@ -62,7 +68,7 @@ def scalar(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
 
 
-def parse_bool(name: str, value: str) -> bool:
+def parse_bool(name: str, value: str, default: bool = False) -> bool:
     """Read a boolean input strictly.
 
     Composite actions have no typed inputs, so these arrive as strings. Only the
@@ -71,13 +77,30 @@ def parse_bool(name: str, value: str) -> bool:
     reporting, or widen a run to the whole repository, with nothing downstream to
     say it had happened.
 
+    An absent value falls to `default`, which repeats what `action.yml` declares
+    — the same duplication `parse_limit` already carries. GitHub substitutes the
+    declared default before the step runs, so the script only sees an empty
+    string when it is run outside the action; reading that as false would turn
+    reporting off silently, which is the failure this function exists to refuse.
+    Keep the two in step when changing either.
     """
     token = scalar(value)
     if token in ("true", "True", "TRUE"):
         return True
-    if token in ("false", "False", "FALSE", ""):
+    if token in ("false", "False", "FALSE"):
         return False
+    if token == "":
+        return default
     raise Failure('%s must be "true" or "false", got %r' % (name, token))
+
+
+def parse_limit(value: str) -> int:
+    token = scalar(value)
+    if not token:
+        return 50
+    if not token.isdigit():
+        raise Failure("annotations_limit must be a whole number, got %r" % token)
+    return int(token)
 
 
 def event_payload() -> JsonObject:
@@ -270,27 +293,221 @@ def diff_command(event_name: str, payload: JsonObject, current_sha: str) -> list
     return command
 
 
-def run_blockwatch(command: list[str] | None, args: list[str], only_changed: bool) -> int:
-    """Run blockwatch and return its exit code.
+def run_blockwatch(
+    command: list[str] | None, args: list[str], only_changed: bool
+) -> tuple[int, str]:
+    """Run blockwatch, returning its exit code and its captured diagnostics.
 
-    Both of its streams stay attached to the job log, as they were when a shell
-    pipeline ran this.
+    stderr is captured rather than streamed so the diagnostics can be read back
+    as annotations, then replayed unchanged: what a reader could previously copy
+    out of the log is still there, after the run rather than during it. stdout —
+    the verbosity report — is left attached to the log as it happens.
     """
     if command is None:
         # Without --diff blockwatch never reads stdin, so there is no descriptor
         # here to block on.
-        return subprocess.run(["blockwatch"] + args).returncode
+        full = ["blockwatch"] + args
+        result = subprocess.run(full, stderr=subprocess.PIPE)
+        return result.returncode, result.stderr.decode("utf-8", "replace")
 
     flags = ["--diff"] + (["--only-changed"] if only_changed else [])
+    full = ["blockwatch"] + flags + args
     with tempfile.TemporaryFile() as diff:
-        git = subprocess.run(command, stdout=diff)
+        git = subprocess.run(command, stdout=diff, stderr=None)
         diff.seek(0)
-        result = subprocess.run(["blockwatch"] + flags + args, stdin=diff)
+        result = subprocess.run(full, stdin=diff, stderr=subprocess.PIPE)
 
     # Mirrors what `set -o pipefail` reported before: blockwatch's own code
     # whenever it failed — an unreadable diff included, since an empty stdin is
     # an error it raises itself — and git's only if blockwatch still exited 0.
-    return result.returncode or git.returncode
+    status = result.returncode or git.returncode
+    return status, result.stderr.decode("utf-8", "replace")
+
+
+# --------------------------------------------------------------------------
+# Reporting
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Violation:
+    """One reported violation, in whichever format blockwatch wrote it."""
+
+    path: str
+    start_line: int
+    end_line: int
+    start_column: int
+    end_column: int
+    level: str
+    code: str
+    address: str
+    suppressed: bool
+    message: str
+
+    @property
+    def single_line(self) -> bool:
+        # GitHub renders a column range only within one line and ignores one
+        # that spans several. Column 0 means blockwatch reported no column.
+        return bool(self.start_line == self.end_line and self.start_column and self.end_column)
+
+
+def level_for(suppressed: bool, severity: int | None) -> str:
+    # A suppressed violation does not fail the run, so it is a notice rather
+    # than an error. blockwatch's severities follow LSP: 1 error, 2 warning,
+    # 3 information, 4 hint.
+    if suppressed:
+        return "notice"
+    if severity == 2:
+        return "warning"
+    if severity and severity >= 3:
+        return "notice"
+    return "error"
+
+
+def parse_json_diagnostics(document: JsonObject) -> Iterator[Violation]:
+    """blockwatch's default output: one object of diagnostics, keyed by file."""
+    for path, entries in document.items():
+        for entry in entries:
+            span = entry.get("range") or {}
+            start = span.get("start") or {}
+            end = span.get("end") or {}
+            suppressed = bool(entry.get("suppressed"))
+            yield Violation(
+                path=path,
+                start_line=start.get("line", 1),
+                end_line=end.get("line", start.get("line", 1)),
+                start_column=start.get("character", 0),
+                end_column=end.get("character", 0),
+                level=level_for(suppressed, entry.get("severity", 1)),
+                code=entry.get("code", "blockwatch"),
+                address=entry.get("address", ""),
+                suppressed=suppressed,
+                message=entry.get("message", ""),
+            )
+
+
+def parse_sarif(document: JsonObject) -> Iterator[Violation]:
+    """The same violations, as a SARIF 2.1.0 log."""
+    for run in document.get("runs") or []:
+        for result in run.get("results") or []:
+            locations = result.get("locations") or [{}]
+            physical = (locations[0] or {}).get("physicalLocation") or {}
+            region = physical.get("region") or {}
+            artifact = physical.get("artifactLocation") or {}
+            suppressed = bool(result.get("suppressions"))
+            sarif_level = result.get("level")
+            severity = {"warning": 2, "note": 3, "none": 3}.get(sarif_level, 1)
+            yield Violation(
+                path=artifact.get("uri", ""),
+                start_line=region.get("startLine", 1),
+                end_line=region.get("endLine", region.get("startLine", 1)),
+                start_column=region.get("startColumn", 0),
+                end_column=region.get("endColumn", 0),
+                level=level_for(suppressed, severity),
+                code=result.get("ruleId", "blockwatch"),
+                address=(result.get("properties") or {}).get("address", ""),
+                suppressed=suppressed,
+                message=(result.get("message") or {}).get("text", ""),
+            )
+
+
+def parse_diagnostics(text: str, output_format: str) -> list[Violation]:
+    """Read the captured diagnostics, or give up quietly.
+
+    Output that is not a parseable document is left alone: a usage error
+    ("diff in stdin is empty.", a malformed suppression address) arrives on the
+    same stream, is already in the log verbatim, and names no line to point at.
+
+    Which parser to use is decided by the input rather than by inspecting the
+    document: the JSON diagnostics are keyed by file path, so a repository
+    holding a file named "runs" would otherwise read as a SARIF log.
+    """
+    if not text.strip():
+        return []
+    try:
+        document = json.loads(text)
+    except ValueError:
+        return []
+    if not isinstance(document, dict):
+        return []
+    if output_format == "sarif":
+        return list(parse_sarif(document))
+    return list(parse_json_diagnostics(document))
+
+
+def escape_data(value: str) -> str:
+    """Percent-encode a workflow command's message.
+
+    A command is delimited text: a raw newline would end it. GitHub's own
+    toolkit encodes exactly these, and the runner decodes them again.
+    """
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def escape_property(value: str) -> str:
+    """The same, plus the separators between properties."""
+    return escape_data(value).replace(":", "%3A").replace(",", "%2C")
+
+
+def emit_annotations(violations: list[Violation], limit: int) -> None:
+    emitted = 0
+    omitted = 0
+    for violation in violations:
+        if emitted >= limit:
+            omitted += 1
+            continue
+        properties = []
+        if violation.path:
+            properties.append("file=%s" % escape_property(violation.path))
+            properties.append("line=%s" % violation.start_line)
+            properties.append("endLine=%s" % violation.end_line)
+            if violation.single_line:
+                properties.append("col=%s" % violation.start_column)
+                properties.append("endColumn=%s" % violation.end_column)
+        properties.append("title=%s" % escape_property("blockwatch: %s" % violation.code))
+
+        message = escape_data(violation.message)
+        # The address is what a reader needs in order to act on the annotation,
+        # and it appears nowhere else on the line. A violation in an unnamed
+        # block has none, so nothing is added for it.
+        if violation.address:
+            # Concatenated, not %-formatted: the literal "%0A" is a newline for
+            # the runner and a format specifier for Python.
+            message += "%0ASuppress with: Blockwatch-suppress: " + violation.address
+        print("::%s %s::%s" % (violation.level, ",".join(properties), message))
+        emitted += 1
+
+    if omitted:
+        print(
+            "::notice title=blockwatch::%d further violation(s) were not annotated "
+            "(annotations_limit=%d). All of them are in the job log above." % (omitted, limit)
+        )
+
+
+def write_summary(violations: list[Violation]) -> None:
+    path = env("GITHUB_STEP_SUMMARY")
+    if not path or not violations:
+        return
+    rows = []
+    for violation in violations[:SUMMARY_ROW_LIMIT]:
+        location = "%s:%s" % (violation.path, violation.start_line) if violation.path else "—"
+        # Markdown here, not a workflow command: a pipe would end the cell and a
+        # newline has to become a line break.
+        cell = violation.message.replace("|", r"\|").replace("\n", "<br>")
+        code = violation.code + (" (suppressed)" if violation.suppressed else "")
+        rows.append("| `%s` | %s | %s | %s |" % (location, code, cell, violation.address or "—"))
+
+    lines = [
+        "### blockwatch: %d violation(s)" % len(violations),
+        "",
+        "| Location | Validator | Message | Suppress address |",
+        "| --- | --- | --- | --- |",
+    ] + rows
+    if len(violations) > len(rows):
+        lines += ["", "_%d further violation(s) not listed._" % (len(violations) - len(rows))]
+
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
 
 
 # --------------------------------------------------------------------------
@@ -298,7 +515,10 @@ def run_blockwatch(command: list[str] | None, args: list[str], only_changed: boo
 
 def main() -> int:
     try:
+        annotations = parse_bool("annotations", env("INPUT_ANNOTATIONS"), default=True)
+        summary = parse_bool("summary", env("INPUT_SUMMARY"), default=True)
         only_changed = parse_bool("only_changed", env("INPUT_ONLY_CHANGED"))
+        limit = parse_limit(env("INPUT_ANNOTATIONS_LIMIT"))
     except Failure as error:
         print("Error: %s." % error, file=sys.stderr)
         return 1
@@ -311,8 +531,29 @@ def main() -> int:
     args = blockwatch_args(suppression_file)
     command = diff_command(event_name, payload, current_sha)
 
-    # blockwatch's exit code is what fails the job.
-    return run_blockwatch(command, args, only_changed)
+    status, diagnostics = run_blockwatch(command, args, only_changed)
+    sys.stdout.flush()
+    sys.stderr.write(diagnostics)
+    sys.stderr.flush()
+
+    # Reporting must never decide the outcome: the violations are in the log
+    # either way, so a failure to annotate them is worth a warning and no more.
+    if annotations or summary:
+        try:
+            violations = parse_diagnostics(diagnostics, scalar(env("INPUT_FORMAT")))
+            if annotations:
+                emit_annotations(violations, limit)
+            if summary:
+                write_summary(violations)
+        except Exception as error:
+            print(
+                "::warning title=blockwatch::Could not turn the blockwatch "
+                "diagnostics into annotations (%s). They are in the job log above." % error
+            )
+
+    # blockwatch's exit code is what fails the job. Everything above only
+    # changes where the violations are shown.
+    return status
 
 
 if __name__ == "__main__":
