@@ -82,7 +82,7 @@ class Result:
         Comparing the annotations against this is what keeps these tests about
         the translation rather than about blockwatch's numbers.
         """
-        document: JsonObject = json.loads(self.stderr[self.stderr.index("{"):])
+        document: JsonObject = json.loads(self.stderr[self.stderr.index("{") :])
         return document
 
 
@@ -169,7 +169,7 @@ class RunTest(ActionTestCase):
 
         result = self.run_action()
 
-        (path, entries), = result.diagnostics.items()
+        ((path, entries),) = result.diagnostics.items()
         entry = entries[0]
         self.assertEqual(len(result.annotations), 1, result.stdout)
         annotation = result.annotations[0]

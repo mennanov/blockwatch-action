@@ -47,11 +47,11 @@ with `annotations: "false"`. Adding a case that annotates adds a card to every p
 touches the fixture.
 
 `scripts/run.py` has black-box tests in [`scripts/run_test.py`](scripts/run_test.py) and is fully
-annotated for `mypy --strict`. Both are fast and need nothing installed:
+annotated for Pyrefly. Both are fast, and the [pre-commit hooks](#the-pre-commit-hooks) run them:
 
 ```shell
 python3 scripts/run_test.py     # or: python3 -m pytest scripts/run_test.py
-mypy --strict scripts/run.py scripts/run_test.py
+pyrefly check                   # preset and disabled codes come from pyproject.toml
 ```
 
 The tests run the script as a subprocess against a **real git repository and the real blockwatch
@@ -78,6 +78,40 @@ every branch. The job summary is not among them.
 Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
 import annotations` keeps lazy, so they cost nothing at runtime on an older interpreter. The one
 alias that *is* evaluated, `JsonObject`, is spelled with `typing.Dict` for that reason.
+
+### The pre-commit hooks
+
+[`.pre-commit-config.yaml`](.pre-commit-config.yaml) runs formatting, types and tests through
+[pre-commit](https://pre-commit.com/). Install once per clone — pre-commit does not arm itself:
+
+```shell
+pipx install pre-commit     # or: brew install pre-commit
+pre-commit install
+pre-commit run --all-files  # on demand, outside a commit
+```
+
+`git commit --no-verify` bypasses them.
+
+The first two hooks come from upstream (`psf/black-pre-commit-mirror` and
+`facebook/pyrefly-pre-commit`), so pre-commit installs and pins those tools itself and a
+contributor needs nothing but pre-commit; both already scope themselves to Python files, so editing
+the README or `action.yml` runs neither. Only the tests are a `local` hook, and the one thing to
+know about it is `language: system`: they drive the real blockwatch binary and real git, which the
+isolated virtualenv pre-commit would otherwise build does not have.
+
+Three details worth keeping:
+
+- **Black rewrites the file and fails, rather than only reporting.** That is the upstream hook's
+  behaviour: re-stage and commit again.
+- **The width is 100, set in `pyproject.toml`**, which exists for that and the Pyrefly settings
+  alone — this repository ships no Python package. A manual `black scripts/` therefore agrees with
+  the hook instead of reformatting to black's default 88, which rewrites three times as many lines
+  and breaks apart comment-aligned argument lists. `ruff format` was the other candidate and may
+  well be the better one; it went unmeasured because its wheel produced no runnable binary here.
+- **Pyrefly runs the `strict` preset**, the closest thing to the `mypy --strict` it replaced, with
+  `missing-override-decorator` turned off: satisfying it needs `typing.override`, which is Python
+  3.12+, and this repository takes no dependencies, so `typing_extensions` is not an option either.
+  The decorator would only ever appear on unittest's `setUp`.
 
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 

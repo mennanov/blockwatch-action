@@ -202,9 +202,7 @@ def write_suppression_file(event_name: str, payload: JsonObject, current_sha: st
     valid input as it stands. This is additive: the `suppress` and
     `suppress_from` inputs still apply.
     """
-    handle = tempfile.NamedTemporaryFile(
-        "w", suffix=".txt", delete=False, encoding="utf-8"
-    )
+    handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
     with handle:
         log = subprocess.run(
             git_log_messages(event_name, payload, current_sha),
@@ -237,7 +235,7 @@ def write_suppression_file(event_name: str, payload: JsonObject, current_sha: st
 
 def blockwatch_args(suppression_file: str) -> list[str]:
     """Everything after `blockwatch`, in the order blockwatch needs it."""
-    args = []
+    args: list[str] = []
     for flag, value in (
         ("-E", env("INPUT_EXTENSIONS")),
         ("-e", env("INPUT_ENABLE")),
@@ -281,7 +279,9 @@ def diff_command(event_name: str, payload: JsonObject, current_sha: str) -> list
         # itself changed, excluding commits the base branch gained since it
         # forked. Two dots would attribute those to the pull request.
         command = [
-            "git", "diff", "--patch",
+            "git",
+            "diff",
+            "--patch",
             "origin/%s...%s" % (env("GITHUB_BASE_REF"), current_sha),
         ]
     elif event_name == "push":
@@ -303,8 +303,14 @@ def diff_command(event_name: str, payload: JsonObject, current_sha: str) -> list
             # Only the head commit is covered; a new branch has no base for its
             # earlier commits, which get checked when it is opened as a PR.
             command = [
-                "git", "diff-tree", "--patch", "--root", "-m",
-                "--first-parent", "--no-commit-id", current_sha,
+                "git",
+                "diff-tree",
+                "--patch",
+                "--root",
+                "-m",
+                "--first-parent",
+                "--no-commit-id",
+                current_sha,
             ]
     else:
         print(
@@ -378,9 +384,7 @@ class Violation:
     def single_line(self) -> bool:
         # GitHub renders a column range only within one line and ignores one
         # that spans several. Column 0 means blockwatch reported no column.
-        return bool(
-            self.start_line == self.end_line and self.start_column and self.end_column
-        )
+        return bool(self.start_line == self.end_line and self.start_column and self.end_column)
 
 
 def level_for(suppressed: bool, severity: int | None) -> str:
@@ -512,8 +516,7 @@ def emit_annotations(violations: list[Violation], limit: int) -> None:
     if omitted:
         print(
             "::notice title=blockwatch::%d further violation(s) were not annotated "
-            "(annotations_limit=%d). All of them are in the job log above."
-            % (omitted, limit)
+            "(annotations_limit=%d). All of them are in the job log above." % (omitted, limit)
         )
 
 
