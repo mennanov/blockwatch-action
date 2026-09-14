@@ -70,7 +70,7 @@ def scalar(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
 
 
-def parse_bool(name: str, value: str) -> bool:
+def parse_bool(name: str, value: str, default: bool = False) -> bool:
     """Read a boolean input strictly.
 
     Composite actions have no typed inputs, so these arrive as strings. Only the
@@ -78,12 +78,21 @@ def parse_bool(name: str, value: str) -> bool:
     rather than read as false, because a mistyped value would otherwise turn off
     reporting, or widen a run to the whole repository, with nothing downstream to
     say it had happened.
+
+    An absent value falls to `default`, which repeats what `action.yml` declares
+    — the same duplication `parse_limit` already carries. GitHub substitutes the
+    declared default before the step runs, so the script only sees an empty
+    string when it is run outside the action; reading that as false would turn
+    reporting off silently, which is the failure this function exists to refuse.
+    Keep the two in step when changing either.
     """
     token = scalar(value)
     if token in ("true", "True", "TRUE"):
         return True
-    if token in ("false", "False", "FALSE", ""):
+    if token in ("false", "False", "FALSE"):
         return False
+    if token == "":
+        return default
     raise Failure('%s must be "true" or "false", got %r' % (name, token))
 
 
@@ -539,8 +548,8 @@ def write_summary(violations: list[Violation]) -> None:
 
 def main() -> int:
     try:
-        annotations = parse_bool("annotations", env("INPUT_ANNOTATIONS"))
-        summary = parse_bool("summary", env("INPUT_SUMMARY"))
+        annotations = parse_bool("annotations", env("INPUT_ANNOTATIONS"), default=True)
+        summary = parse_bool("summary", env("INPUT_SUMMARY"), default=True)
         only_changed = parse_bool("only_changed", env("INPUT_ONLY_CHANGED"))
         limit = parse_limit(env("INPUT_ANNOTATIONS_LIMIT"))
     except Failure as error:

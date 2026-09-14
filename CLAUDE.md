@@ -46,12 +46,24 @@ emits only the "further violation(s)" notice; the SARIF case runs its filter int
 with `annotations: "false"`. Adding a case that annotates adds a card to every pull request that
 touches the fixture.
 
-`scripts/run.py` is fully annotated and passes `mypy --strict`. Keep it that way — the script has
-no test suite of its own, so the type checker is the only automated check on it:
+`scripts/run.py` has black-box tests in [`scripts/run_test.py`](scripts/run_test.py) and is fully
+annotated for `mypy --strict`. Both are fast and need nothing installed:
 
 ```shell
-mypy --strict scripts/run.py
+python3 scripts/run_test.py     # or: python3 -m pytest scripts/run_test.py
+mypy --strict scripts/run.py scripts/run_test.py
 ```
+
+The tests run the script as a subprocess with `git` and `blockwatch` replaced by stubs on `PATH`,
+so they need no repository, no network and no blockwatch install, and they import nothing from
+`run.py` — rearranging its internals must not touch them. The stubs record their argv, which is how
+the two invariants with a history of breaking silently are checked: that `globs` stay last, and
+that a first push to a new branch uses `diff-tree` rather than `git diff --root`.
+
+They are ordered by importance, most critical first, and the loader compares definition lines to
+keep that order at run time — `sortTestMethodsUsing = None` would not, since unittest builds its
+list from `dir()`, which is already alphabetical. Coverage is deliberately partial: the ten cases
+are the ones whose failure would be worst, not every branch. The job summary is not among them.
 
 Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
 import annotations` keeps lazy, so they cost nothing at runtime on an older interpreter. The one
