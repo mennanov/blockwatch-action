@@ -19,6 +19,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator
 
@@ -122,16 +124,48 @@ def event_payload() -> JsonObject:
 # --------------------------------------------------------------------------
 
 
-def pull_request_body(payload: JsonObject) -> str:
-    """The pull request description, as the event payload carries it.
+def pull_request_body(payload: JsonObject) -> tuple[str, str]:
+    """The description, read live, with the event payload as the fallback.
 
-    It reaches the script as data — through the payload file, never through an
-    expression expansion. It is written by whoever opened the request, a
-    stranger on a fork included, and a `${{ github.event.pull_request.body }}`
-    inside `run:` would paste their text into a shell for bash to execute.
+    The payload is a snapshot taken when the run was created, and re-running a
+    workflow replays it. A suppression added to the description afterwards would
+    stay invisible until the next push, which defeats the obvious loop: read the
+    annotation, paste its address into the description, press Re-run, watch the
+    violation stop blocking.
+
+    The live copy replaces the snapshot rather than being merged with it, so
+    *removing* an address takes effect too.
     """
-    body = (payload.get("pull_request") or {}).get("body") or ""
-    return str(body)
+    snapshot = (payload.get("pull_request") or {}).get("body") or ""
+    number = (payload.get("pull_request") or {}).get("number")
+    token = env("GH_TOKEN")
+    repository = env("GITHUB_REPOSITORY")
+    if not (token and number and repository):
+        return snapshot, "the event payload"
+
+    url = "%s/repos/%s/pulls/%s" % (
+        env("GITHUB_API_URL", "https://api.github.com"),
+        repository,
+        number,
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": "Bearer %s" % token,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "blockwatch-action",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            document = json.load(response)
+        body = (document.get("body") if isinstance(document, dict) else "") or ""
+        return str(body), "the API, as it reads now"
+    except urllib.error.HTTPError as error:
+        return snapshot, "the event payload (the API answered HTTP %s)" % error.code
+    except Exception as error:  # network, DNS, timeout, malformed JSON
+        return snapshot, "the event payload (the API read failed: %s)" % error
 
 
 def git_log_messages(event_name: str, payload: JsonObject, current_sha: str) -> list[str]:
@@ -177,7 +211,9 @@ def write_suppression_file(event_name: str, payload: JsonObject, current_sha: st
         )
         handle.write(log.stdout.decode("utf-8", "replace"))
         if event_name == "pull_request":
-            handle.write("\n%s\n" % pull_request_body(payload))
+            body, source = pull_request_body(payload)
+            handle.write("\n%s\n" % body)
+            print("Note: pull request description read from %s." % source)
 
     # A suppression picked up here changes the exit code without appearing
     # anywhere in the workflow file, so the log is the only place a reader can

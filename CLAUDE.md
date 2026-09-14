@@ -85,8 +85,9 @@ Two consequences worth keeping:
   spliced into a shell script is code; `INPUT_GLOBS` is data. One of these values — the pull request
   description — is written by whoever opened the request, a stranger on a fork included, and it is
   now read from `GITHUB_EVENT_PATH` rather than passed through an expression at all.
-- **The runner requirement is Python 3**, which every GitHub-hosted runner has. The README lists
-  it alongside bash, git and curl.
+- **`jq` and `curl` are no longer needed.** `json` and `urllib` come with Python, so the runner
+  requirement is Python 3 (which every GitHub-hosted runner has) instead of two CLI tools. The
+  README lists it.
 
 The script reads `GITHUB_EVENT_PATH` for the event, so `github.event.before`, the PR number and the
 PR body need no `env:` entry: adding an input means adding one `INPUT_*` line to `action.yml` and
@@ -141,7 +142,15 @@ ignores every line that isn't an address. Three details are load-bearing:
   three — it wants the commits a PR adds, not a patch. A new branch falls back to the head commit alone,
   matching the diff's own coverage, and an event with no diff reads `HEAD` so that a `workflow_dispatch`
   re-run behaves like the push that first checked that commit.
-- **The PR description is never expanded inline.** The description is written by whoever opened the PR, a
+- **The PR description is read from the API at run time, with the event payload as the fallback.** The
+  payload is a snapshot taken when the run was created, and re-running a workflow replays it — so a
+  suppression added to the description afterwards would be invisible until the next push, which defeats
+  the obvious workflow of fixing the description and pressing Re-run. `GH_TOKEN: ${{ github.token }}` is
+  in the step's `env:` for this one read; a missing or restricted token, or any non-200, falls back to
+  `PR_BODY` rather than failing, and the log says which source was used. The cost is in the README under
+  Known limitations: an edit now takes effect without a new commit, so a suppression can arrive after a
+  review without disturbing the approval.
+- **Neither source is ever expanded inline.** The description is written by whoever opened the PR, a
   stranger on a fork included; a `${{ github.event.pull_request.body }}` anywhere inside `run:` would
   paste their text into the script for bash to execute. It reaches the script through the environment or
   through a file, never through an expression — the one attacker-controlled input in the step, where

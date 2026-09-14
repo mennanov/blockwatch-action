@@ -185,3 +185,11 @@ runs:
         INPUT_ANNOTATIONS_LIMIT: ${{ inputs.annotations_limit }}
         INPUT_SUMMARY: ${{ inputs.summary }}
         INPUT_DIFF_PATHSPEC: ${{ inputs.diff_pathspec }}
+        # Used for one thing only: reading the pull request description as it
+        # reads now, rather than as the event payload froze it when the run was
+        # created. A fork's token is read-only and a workflow may restrict it
+        # further; either way the script falls back to the payload.
+        #
+        # The description itself is read from GITHUB_EVENT_PATH, so it needs no
+        # variable of its own and never passes through an expression.
+        GH_TOKEN: ${{ github.token }}
