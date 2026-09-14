@@ -1,0 +1,25 @@
+# Tool configuration only. This repository ships no Python package: `scripts/`
+# is the action's seventh step, run directly by the interpreter.
+#
+# Both settings below are read by the pre-commit hooks, by the CLI and by an
+# editor alike, so there is one answer rather than three.
+#
+# 100 rather than black's default 88 because the code and its comments were
+# already written to that width; at 88 the formatter rewrites three times as
+# many lines and starts breaking comment-aligned argument lists.
+[tool.black]
+line-length = 100
+
+# Type checking. `strict` is the closest preset to the `mypy --strict` this
+# replaced; one of its checks is turned off because satisfying it would cost
+# more than it is worth here.
+[tool.pyrefly]
+project-includes = ["scripts"]
+preset = "strict"
+
+[tool.pyrefly.errors]
+# `@override` needs typing.override, which is Python 3.12+. The action's own
+# script has to run on whatever interpreter a self-hosted runner provides, and
+# this repository takes no dependencies, so typing_extensions is not an option
+# either. The decorator would only ever appear on unittest's setUp.
+missing-override-decorator = false
