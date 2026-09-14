@@ -29,22 +29,32 @@ The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failur
 `act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `only_changed`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
 
 Every case but the last group passes, which cannot exercise the reporting: a clean run
-produces no diagnostics to annotate. `testdata/annotations-fixture.bwfixture` violates
-`keep-sorted` on purpose for those, and carries an extension blockwatch does not know, so
-every other case walks past it — only the annotation cases make it visible, by passing
-`extensions: "bwfixture=md"`. They are `continue-on-error: true` because the step is
-*meant* to fail; a `git`-tracked file that failed every run would make the workflow
-useless as a smoke test. Don't "fix" that fixture.
+produces no diagnostics to annotate. The two files in `testdata/` violate `keep-sorted` on
+purpose for those, and carry an extension blockwatch does not know, so every other case
+walks past them — only the annotation cases make them visible, by passing
+`extensions: "bwfixture=md"`. Those cases are `continue-on-error: true` because the step
+is *meant* to fail; a `git`-tracked file that failed every run would make the workflow
+useless as a smoke test. Don't "fix" those fixtures.
 
-Only **one** of those cases emits an error annotation, and that is deliberate. They all point at
-the same fixture, so each case that annotates puts an identical card on its single violating line —
-and the workflow used to run twice per pull request (`push` *and* `pull_request`, for a branch in
-this repository), doubling that again: eight cards on one line. The trigger is now
-`push: branches: [main]`, and the other cases exercise their input while emitting nothing.
-`annotations_limit: "0"` counts every violation as omitted, which reaches the cap's own branch and
-emits only the "further violation(s)" notice; the SARIF case runs its filter into the job summary
-with `annotations: "false"`. Adding a case that annotates adds a card to every pull request that
-touches the fixture.
+**Each case that annotates has a fixture to itself**, and that is the whole reason there are two.
+Pointed at the same file, the plain case and the suppressed one put an error and a notice on one
+line — the same violation, same title, same message, differing only in the icon, which reads as a
+duplicate rather than as two checks. `annotations-fixture.bwfixture` carries the error card and
+`suppressed-fixture.bwfixture` the notice, so each is alone on its line, and both `globs` name a
+single file to keep it that way.
+
+The three remaining cases annotate nothing at all: `annotations_limit: "0"` counts every violation
+as omitted, which reaches the cap's own branch and emits only the "further violation(s)" notice,
+while the SARIF and off cases pass `annotations: "false"`. Those still glob `testdata/*.bwfixture`
+and so see both files, which costs nothing since none of them emits a file annotation.
+
+The workflow also used to run twice per pull request (`push` *and* `pull_request`, for a branch in
+this repository), doubling whatever it produced; the trigger is now `push: branches: [main]`. Note
+that a *merged* pull request still shows each card twice, because merging pushes to main and that
+run annotates the merge commit as well.
+
+Adding a case that annotates adds a card to every pull request that touches its fixture. Give it a
+fixture of its own.
 
 `scripts/run.py` has black-box tests in [`scripts/run_test.py`](scripts/run_test.py) and is fully
 annotated for Pyrefly. Both are fast, and the [pre-commit hooks](#the-pre-commit-hooks) run them:

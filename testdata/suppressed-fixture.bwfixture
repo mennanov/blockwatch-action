@@ -1,0 +1,9 @@
+This file violates keep-sorted on purpose, like `annotations-fixture.bwfixture`. It exists so the
+suppressed case annotates a line of its own: two cases pointing at one fixture put an error and a
+notice on the same line, which reads as the same violation reported twice.
+
+<!-- <block name="unsorted" keep-sorted> -->
+- plum
+- apricot
+- quince
+<!-- </block> -->

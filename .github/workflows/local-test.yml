@@ -110,16 +110,16 @@ jobs:
       #
       # The fixture's extension is unknown to blockwatch, so the cases above walk
       # past it; `extensions` is what makes it visible here.
-      # Exactly one case emits an error annotation. The rest exercise their own
-      # input while emitting none, because they would otherwise stack identical
-      # cards on the fixture's one violating line — the same violation, reported
-      # once per case, on every pull request that touches the file.
+      # The two cases that annotate get a fixture each: pointed at the same one
+      # they put an error and a notice on a single line, which reads as the same
+      # violation reported twice. The rest exercise their own input while
+      # emitting no file annotation at all.
       - name: Run Blockwatch Action (Annotations)
         continue-on-error: true
         uses: ./
         with:
           extensions: "bwfixture=md"
-          globs: "testdata/*.bwfixture"
+          globs: "testdata/annotations-fixture.bwfixture"
           verbosity: "none"
 
       - name: Run Blockwatch Action (Annotations Off)
@@ -161,5 +161,5 @@ jobs:
         uses: ./
         with:
           extensions: "bwfixture=md"
-          globs: "testdata/*.bwfixture"
-          suppress: "testdata/annotations-fixture.bwfixture"
+          globs: "testdata/suppressed-fixture.bwfixture"
+          suppress: "testdata/suppressed-fixture.bwfixture"
