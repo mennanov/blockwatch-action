@@ -122,6 +122,7 @@ Self-hosted runners require:
 - **git 2.18+**
 - **bash** (Git Bash on Windows)
 - **curl**, plus **tar** (Linux) or **unzip** (macOS/Windows)
+- **Python 3.7+**, as `python3` or `python` on `PATH` — the action's logic runs there
 - Network access to `github.com` and `crates.io`
 - Writable `CARGO_HOME` or `CARGO_INSTALL_ROOT`
 

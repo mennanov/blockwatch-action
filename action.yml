@@ -139,237 +139,34 @@ runs:
 
     - name: Run blockwatch on diff
       id: diff
+      # The logic lives in scripts/run.py, not here. A `run:` block that embeds
+      # ${{ }} expressions is parsed as one GitHub template, and a template caps
+      # at 21000 characters — a ceiling this step reached, and one no amount of
+      # testing the logic itself would have found, since it fails at parse time.
+      # A file is not a template.
+      #
+      # It also ends the inline expansion of inputs. Every value now arrives as
+      # an environment variable, which is data; a `${{ inputs.globs }}` spliced
+      # into a shell script is code, and one of these values — the pull request
+      # description — is written by whoever opened the request.
       run: |
-        # An array, not a string: an extension mapping or glob containing spaces
-        # has to arrive as a single argv entry, and re-splitting a flat string on
-        # whitespace would tear it into several.
-        BLOCKWATCH_ARGS=()
-
-        # Every list-valued input accepts comma- or newline-separated values,
-        # because a YAML block scalar is the readable way to write a long list in
-        # a workflow file and a quoted string is the terse one. Both normalize to
-        # one flag/value pair per item.
-        add_args() {
-          local flag="$1"
-          local input="$2"
-          if [[ -n "$input" ]]; then
-            # Newlines become commas so a single split handles both spellings.
-            local clean_input="${input//$'\n'/,}"
-            IFS=',' read -ra ITEMS <<< "$clean_input"
-            for item in "${ITEMS[@]}"; do
-              # Items arrive carrying the indentation of a YAML block scalar and
-              # whatever spacing followed a comma; blockwatch would read that
-              # padding as part of the value.
-              item="$(echo "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-              if [[ -n "$item" ]]; then
-                if [[ -n "$flag" ]]; then
-                  BLOCKWATCH_ARGS+=("$flag" "$item")
-                else
-                  BLOCKWATCH_ARGS+=("$item")
-                fi
-              fi
-            done
-          fi
-        }
-
-        add_args "-E" "${{ inputs.extensions }}"
-        add_args "-e" "${{ inputs.enable }}"
-        add_args "-d" "${{ inputs.disable }}"
-        add_args "--ignore" "${{ inputs.ignore }}"
-
-        # Each item is the address of a violation to report but not fail on,
-        # FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]], with every segment left off the
-        # end widening what it covers. Nothing is checked here: blockwatch
-        # rejects a malformed address naming the segment at fault, and silently
-        # ignores a well-formed one that covers no violation — an address is
-        # meant to be copied out of a previous run's diagnostics, so the run
-        # that emits it is the one able to say whether it still matches.
-        add_args "--suppress" "${{ inputs.suppress }}"
-
-        # The same addresses, read out of a file instead of written here
-        # (blockwatch 0.5.4+). Only `Blockwatch-suppress: ADDRESS` lines count
-        # and every other line is ignored, so a commit message is valid input
-        # and a suppression can travel with the commit that needs it rather than
-        # living in the workflow. The two inputs accumulate; neither overrides
-        # the other. An unreadable path fails the step, and that is left to
-        # blockwatch: a run that quietly skipped its suppression file would fail
-        # on the violations instead, pointing at the code rather than the typo.
-        add_args "--suppress-from" "${{ inputs.suppress_from }}"
-
-        # The revisions this run spans, resolved once: the suppression sources
-        # just below and the diff at the end of the step are scoped by the same
-        # pair, so what may suppress a violation and what is checked for one
-        # cannot drift apart.
-        BEFORE_SHA="${{ github.event.before }}"  # empty unless this is a push
-        CURRENT_SHA="${{ github.sha }}"          # = github.event.after on a push
-        ZERO_SHA="0000000000000000000000000000000000000000"
-
-        # Suppressions also travel with the work under test rather than only in
-        # the workflow file: the commit messages of the commits being checked,
-        # and on a pull request its description, are handed to --suppress-from
-        # as-is. blockwatch reads `Blockwatch-suppress: ADDRESS` lines out of any
-        # text and ignores every other line, so no extraction is needed here.
-        # This is additive — `suppress` and `suppress_from` still apply.
-        #
-        # The range mirrors the diff below exactly, so only the commits whose
-        # changes are being checked can suppress anything: a commit elsewhere in
-        # the repository cannot reach in and silence a violation.
-        AUTO_SUPPRESS_FILE="$(mktemp)"
-        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          # Two dots, not the three the diff uses: this wants the commits the
-          # pull request adds, not a patch. The merge commit GitHub checks out
-          # is included and harmless, its generated message carrying no address.
-          git log --format=%B "origin/${{ github.base_ref }}..$CURRENT_SHA" >> "$AUTO_SUPPRESS_FILE"
-          # The description arrives through the environment, never through an
-          # expression expansion. It is written by whoever opened the request —
-          # a stranger, on a fork — and expanding it inline would paste their
-          # text into this script for bash to run.
-          printf '%s\n' "$PR_BODY" >> "$AUTO_SUPPRESS_FILE"
-        elif [[ "${{ github.event_name }}" == "push" ]]; then
-          if [[ "$BEFORE_SHA" == "$ZERO_SHA" ]]; then
-            # A new branch has no prior tip to enumerate from, so only the head
-            # commit is read — exactly the commit the diff below covers.
-            git log -1 --format=%B "$CURRENT_SHA" >> "$AUTO_SUPPRESS_FILE"
-          else
-            git log --format=%B "$BEFORE_SHA..$CURRENT_SHA" >> "$AUTO_SUPPRESS_FILE"
-          fi
+        # Git Bash on the Windows runners does not always expose `python3`.
+        if command -v python3 >/dev/null 2>&1; then
+          PYTHON=python3
         else
-          # No push range and no pull request, so the commit being scanned is the
-          # only one that can be meant. Reading it keeps a workflow_dispatch
-          # re-run of a commit behaving like the push that first checked it.
-          git log -1 --format=%B HEAD >> "$AUTO_SUPPRESS_FILE"
+          PYTHON=python
         fi
-        BLOCKWATCH_ARGS+=("--suppress-from" "$AUTO_SUPPRESS_FILE")
-
-        # A suppression picked up from a commit message changes the exit code
-        # without appearing anywhere in the workflow file, so the log is the only
-        # place a reader can find out it happened. The pattern mirrors what
-        # blockwatch matches (prefix at the start of the line, leading whitespace
-        # trimmed, case-insensitive); it only labels the lines, and blockwatch
-        # remains the one deciding which of them take effect.
-        if FOUND="$(grep -iE '^[[:space:]]*blockwatch-suppress:' "$AUTO_SUPPRESS_FILE")"; then
-          echo "Note: suppression addresses found in the commit messages/description under test:"
-          echo "$FOUND"
-        fi
-
-        # verbosity holds one enum value (none|summary|full) rather than a list,
-        # so it does not go through add_args. A comma-separated value there would
-        # expand to --verbosity twice, and clap answers a repeated single-value
-        # flag by keeping the last occurrence — so a malformed input would be
-        # quietly acted on instead of reported.
-        #
-        # A bare token needs no more normalization than having its whitespace
-        # removed. An empty input appends nothing at all, leaving blockwatch on
-        # its own default of "none".
-        #
-        # The level is deliberately not validated here: blockwatch rejects an
-        # unknown one and prints the accepted values, which tells the reader more
-        # than this step could.
-        VERBOSITY="${{ inputs.verbosity }}"
-        VERBOSITY="${VERBOSITY//[$'\n\r\t ']/}"
-        if [[ -n "$VERBOSITY" ]]; then
-          BLOCKWATCH_ARGS+=("--verbosity" "$VERBOSITY")
-        fi
-
-        # format (blockwatch 0.5.3+) is a single enum too (json|sarif), and is
-        # kept out of add_args for the same reason verbosity is. "sarif" writes a
-        # SARIF 2.1.0 log in place of the JSON diagnostics, and writes one even
-        # when the run found nothing, since a code-scanning service expects a log
-        # from every run. Both formats go to stderr, which this step leaves
-        # attached to the job log: uploading the log to code scanning means
-        # capturing that stream in the calling workflow, not just setting this.
-        #
-        # Unknown values are left to blockwatch, which names the accepted ones.
-        FORMAT="${{ inputs.format }}"
-        FORMAT="${FORMAT//[$'\n\r\t ']/}"
-        if [[ -n "$FORMAT" ]]; then
-          BLOCKWATCH_ARGS+=("--format" "$FORMAT")
-        fi
-
-        # Globs are positional, so they must come last and nothing may be
-        # appended after this point. They narrow whichever set of files the run
-        # already selected — since blockwatch 0.4.0 a glob can only ever remove
-        # files from a run, never add one back that the mode left out.
-        add_args "" "${{ inputs.globs }}"
-
-        # Every use below leaves this unquoted on purpose, so one input can carry
-        # several space-separated pathspecs (":(exclude).github/ :(exclude)docs/").
-        # The shellcheck directives mark that word-splitting as intended.
-        DIFF_PATHSPEC="${{ inputs.diff_pathspec }}"
-
-        # --diff is what makes blockwatch read the piped diff at all; without it
-        # stdin is ignored and the tree is scanned as if nothing had changed.
-        # --only-changed then narrows the run from every block in the repository
-        # to the ones that diff touched. An unrecognized boolean is rejected
-        # rather than read as false, since nothing downstream would report it.
-        ONLY_CHANGED="${{ inputs.only_changed }}"
-        ONLY_CHANGED="${ONLY_CHANGED//[$'\n\r\t ']/}"
-        DIFF_FLAGS=(--diff)
-        case "$ONLY_CHANGED" in
-          true|True|TRUE) DIFF_FLAGS+=(--only-changed) ;;
-          false|False|FALSE|'') ;;
-          *) echo "Error: 'only_changed' must be \"true\" or \"false\", got '$ONLY_CHANGED'." >&2; exit 1 ;;
-        esac
-
-        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          # Three dots: diffing against the merge base shows what the PR itself
-          # changed, excluding commits the base branch gained since it forked.
-          # Two dots would attribute those to the PR.
-          # `--` keeps git from reading a pathspec as a revision name.
-          if [[ -n "$DIFF_PATHSPEC" ]]; then
-            # shellcheck disable=SC2086
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-          else
-            git diff --patch origin/${{ github.base_ref }}...${{ github.sha }} | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-          fi
-
-        elif [[ "${{ github.event_name }}" == "push" ]]; then
-          # The span the push added: the branch tip beforehand, up to the new
-          # one, both resolved above.
-          #
-          # A push that creates a branch reports an all-zero "before" SHA: there
-          # is no prior tip, so the head commit is diffed against the empty tree.
-          if [[ "$BEFORE_SHA" == "$ZERO_SHA" ]]; then
-            # `git diff-tree`, not `git diff`. --root belongs to diff-tree, and
-            # `git diff` accepts it silently rather than rejecting it, then
-            # compares the *working tree* against the SHA — on this action's
-            # clean checkout an empty patch, letting every validator pass without
-            # examining anything.
-            #
-            # -m --first-parent is load-bearing: diff-tree prints nothing at all
-            # for a merge commit unless asked, and a newly pushed branch can
-            # perfectly well have a merge at its head.
-            #
-            # --no-commit-id drops the bare SHA line diff-tree emits ahead of the
-            # patch. It is not part of the diff format blockwatch documents as
-            # its input, so relying on it being tolerated would be a wager.
-            #
-            # Only the head commit is covered: a new branch has no base to diff
-            # its earlier commits against. Those get checked when it is opened as
-            # a pull request.
-            if [[ -n "$DIFF_PATHSPEC" ]]; then
-              # shellcheck disable=SC2086
-              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            else
-              git diff-tree --patch --root -m --first-parent --no-commit-id $CURRENT_SHA | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            fi
-          else
-            if [[ -n "$DIFF_PATHSPEC" ]]; then
-              # shellcheck disable=SC2086
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA -- $DIFF_PATHSPEC | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            else
-              git diff --patch $BEFORE_SHA...$CURRENT_SHA | blockwatch "${DIFF_FLAGS[@]}" "${BLOCKWATCH_ARGS[@]}"
-            fi
-          fi
-
-        else
-          echo "Note: event '${{ github.event_name }}' provides no diff, so the whole repository is scanned. Diff-driven checks (e.g. affects) cannot run, and 'only_changed' does not apply."
-          blockwatch "${BLOCKWATCH_ARGS[@]}"
-        fi
+        "$PYTHON" "$GITHUB_ACTION_PATH/scripts/run.py"
       shell: bash
       env:
-        # Passed in rather than expanded into the script, because a pull request
-        # description is attacker-controlled text: `${{ github.event.pull_request.body }}`
-        # written inline anywhere above would let a body ending in `"; curl ... | sh; #`
-        # run commands on the runner. As a variable it is only ever data.
-        PR_BODY: ${{ github.event.pull_request.body }}
+        INPUT_EXTENSIONS: ${{ inputs.extensions }}
+        INPUT_ENABLE: ${{ inputs.enable }}
+        INPUT_DISABLE: ${{ inputs.disable }}
+        INPUT_IGNORE: ${{ inputs.ignore }}
+        INPUT_SUPPRESS: ${{ inputs.suppress }}
+        INPUT_SUPPRESS_FROM: ${{ inputs.suppress_from }}
+        INPUT_GLOBS: ${{ inputs.globs }}
+        INPUT_VERBOSITY: ${{ inputs.verbosity }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_ONLY_CHANGED: ${{ inputs.only_changed }}
+        INPUT_DIFF_PATHSPEC: ${{ inputs.diff_pathspec }}

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A single **composite GitHub Action** that installs and runs the [`blockwatch`](https://github.com/mennanov/blockwatch) Rust CLI against a repository's git diff. There is no application source and no build step — `action.yml` *is* the product. Everything else (README, test workflow, dependabot) supports it.
+A single **composite GitHub Action** that installs and runs the [`blockwatch`](https://github.com/mennanov/blockwatch) Rust CLI against a repository's git diff. There is no build step. `action.yml` declares the inputs and the six install steps; the seventh step's logic — argument building, suppression sources, the diff, and the reporting — lives in [`scripts/run.py`](scripts/run.py), which is where almost every change belongs. Everything else (README, test workflow, dependabot) supports the two.
 
 ## Commands
 
@@ -26,7 +26,7 @@ act push -W .github/workflows/local-test.yml -e /tmp/push.json
 
 The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failure — use one of the forms above.
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `only_changed`). To exercise one case in isolation, temporarily comment out the others.
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from` and `only_changed`). To exercise one case in isolation, temporarily comment out the others.
 
 To check CLI behaviour without the Action wrapper (`blockwatch` is installed locally):
 
@@ -44,15 +44,39 @@ Seven sequential steps, each with a non-obvious constraint:
 4. **Cache** `blockwatch{,.exe}` under the step-2 directory, keyed on `runner.os` + `runner.arch` + the step-3 version. `runner.arch` matters because the cache is shared across a repo's runners, so a mixed-architecture fleet would otherwise restore a binary for the wrong arch.
 5. **Install cargo-binstall** via `cargo-bins/cargo-binstall`, skipped on cache hit. The version appears **twice**, deliberately: the `uses:` ref pins the action and its install script, while the `version:` input pins the executable that script downloads. Omitting the input is not a smaller pin but a different one — the script then fetches from `releases/latest`, so a new cargo-binstall release reaches every `@v1` consumer with no change here, and only on a cache miss, which makes any resulting breakage intermittent. Dependabot bumps the `uses:` ref but not the input, so re-sync the two by hand when the grouped PR lands.
 6. **Install blockwatch** by calling `cargo-binstall`, *not* `cargo binstall` — the previous step ships binstall alone and no toolchain, so `cargo` may not exist. Passes `--disable-strategies compile`: without that, a target with no prebuilt binary would silently fall through to `cargo install`, which needs `cargo` and would just fail with a confusing "command not found" instead of a clear "no binary available".
-7. **Run** — pipes `git diff --patch` into `blockwatch "${DIFF_FLAGS[@]}"`. blockwatch's exit code is what fails the job. See [Run mode](#run-mode) for what that array holds.
+7. **Run** — a five-line wrapper that picks an interpreter and calls `scripts/run.py`. The script builds blockwatch's arguments, assembles the suppression sources, produces the diff for this event and pipes it into blockwatch, whose exit code is what fails the job. See [Run mode](#run-mode).
 
 The version is pinned deliberately, not resolved dynamically: bump the string in step 3 when a new blockwatch release should be picked up. There's no Dependabot or other automation for this — it doesn't track arbitrary strings inside `action.yml`.
 
 Self-hosted runners are supported but assume no Rust toolchain; the requirements they *do* have to satisfy (runner ≥ 2.327.1, glibc ≥ 2.28, git ≥ 2.18, `bash`, `curl` + `tar`/`unzip`, egress) are listed in the README. Keep those two in sync when bumping the pinned action versions.
 
+### Why the logic is in a script
+
+A `run:` block that embeds `${{ }}` expressions is parsed as one GitHub *template*, and a template
+cannot exceed **21000 characters**. The step reached 22203 and every run of the action died with
+`The template is not valid ... Exceeded max expression length 21000` — a parse error, before the
+first line executes, which no amount of testing the logic itself would have caught. Comments were
+half the script, so the ceiling was being spent on documentation.
+
+`scripts/run.py` is not a template, so the limit is gone rather than merely avoided: the wrapper in
+`action.yml` is 200 characters and contains no expressions at all. **Don't move logic back inline.**
+
+Two consequences worth keeping:
+
+- **Inputs reach the script as environment variables, never as expansions.** A `${{ inputs.globs }}`
+  spliced into a shell script is code; `INPUT_GLOBS` is data. One of these values — the pull request
+  description — is written by whoever opened the request, a stranger on a fork included, and it is
+  now read from `GITHUB_EVENT_PATH` rather than passed through an expression at all.
+- **The runner requirement is Python 3**, which every GitHub-hosted runner has. The README lists
+  it alongside bash, git and curl.
+
+The script reads `GITHUB_EVENT_PATH` for the event, so `github.event.before`, the PR number and the
+PR body need no `env:` entry: adding an input means adding one `INPUT_*` line to `action.yml` and
+reading it in `run.py`.
+
 ### Input handling
 
-Every list input accepts comma-separated *or* newline-separated values. The `add_args` bash helper normalizes newlines to commas, splits on comma, trims whitespace, and appends each item to the `BLOCKWATCH_ARGS` array (an array, not a string, so values containing spaces survive). Flag mapping:
+Every list input accepts comma-separated *or* newline-separated values. `split_list` normalizes newlines to commas, splits, trims, and drops blanks; the results are appended to an argument *list*, so a value containing spaces stays one argv entry. Flag mapping:
 
 | input          | flag                                    |
 | -------------- | --------------------------------------- |
@@ -70,7 +94,7 @@ Every list input accepts comma-separated *or* newline-separated values. The `add
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
 
 `suppress` (blockwatch 0.5.2+) carries violation addresses, `FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]]`, and is a
-plain list like the rest — the `:` separators survive `add_args` untouched, since it splits only on commas and
+plain list like the rest — the `:` separators survive `split_list` untouched, since it splits only on commas and
 newlines. That splitting is the one limit worth knowing: an address whose file path contains a comma cannot be
 passed. Nothing is validated here, because blockwatch draws the line in both directions itself — a malformed
 address is rejected with the offending segment named (exit 2, failing the step), while a well-formed one that
@@ -95,11 +119,11 @@ ignores every line that isn't an address. Three details are load-bearing:
   three — it wants the commits a PR adds, not a patch. A new branch falls back to the head commit alone,
   matching the diff's own coverage, and an event with no diff reads `HEAD` so that a `workflow_dispatch`
   re-run behaves like the push that first checked that commit.
-- **The PR description is passed as `PR_BODY` in the step's `env:`, never expanded inline.** It is written
-  by whoever opened the PR, a stranger on a fork included; a `${{ github.event.pull_request.body }}`
-  anywhere inside `run:` would paste their text into the script for bash to execute. This is the one
-  expansion in the step that is attacker-controlled rather than author-controlled — every other one comes
-  from the workflow file or from git.
+- **The PR description is never expanded inline.** The description is written by whoever opened the PR, a
+  stranger on a fork included; a `${{ github.event.pull_request.body }}` anywhere inside `run:` would
+  paste their text into the script for bash to execute. It reaches the script through the environment or
+  through a file, never through an expression — the one attacker-controlled input in the step, where
+  every other one comes from the workflow file or from git.
 - **The addresses found are echoed to the log.** A suppression from a commit message changes the exit code
   while appearing nowhere in the workflow file. The `grep` that labels them mirrors blockwatch's own match
   (prefix at line start, leading whitespace trimmed, case-insensitive) but decides nothing; drift there
@@ -111,13 +135,13 @@ carries a malformed address (too many `:` segments, or a trailing one) fails the
 skipped. A mid-sentence mention or a `>`-quoted line is not matched, so ordinary prose is safe.
 
 The block sits before the `globs` call on purpose: globs are positional and nothing may be appended to
-`BLOCKWATCH_ARGS` after them.
+the argument list after them.
 
-`only_changed` is a boolean, so it does not go through `add_args` either. It arrives as a string — composite actions have no typed inputs — and a `case` maps `true`/`True`/`TRUE` to the `--only-changed` flag and `false`/`False`/`FALSE`/empty to nothing. Anything else exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
+`only_changed` is a boolean, so it does not go through `split_list` either. It arrives as a string — composite actions have no typed inputs — and `parse_bool` accepts `true`/`True`/`TRUE` and `false`/`False`/`FALSE`/empty. Anything else raises and exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan.
 
-`verbosity` is the one input that does **not** go through `add_args`: it's a single clap enum (`none`/`summary`/`full`), not a list, and feeding a comma-separated value to `add_args` would emit `--verbosity` twice, which clap resolves by silently keeping the last one. It's trimmed inline instead and appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
+`verbosity` is the one input that does **not** go through `split_list`: it's a single clap enum (`none`/`summary`/`full`), not a list, and splitting a comma-separated value would emit `--verbosity` twice, which clap resolves by silently keeping the last one. `scalar` strips its whitespace instead, and it is appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
 
-`format` (blockwatch 0.5.3+) is the other scalar enum (`json`/`sarif`) and is kept out of `add_args` for
+`format` (blockwatch 0.5.3+) is the other scalar enum (`json`/`sarif`) and is kept out of `split_list` for
 exactly the reason `verbosity` is — a comma in it would emit `--format` twice and clap would silently keep the
 last. `sarif` swaps the JSON diagnostics for a SARIF 2.1.0 log, and unlike them writes one even when the run
 found nothing. Both formats go to stderr, and the run step leaves stderr attached to the job log rather than
@@ -126,7 +150,7 @@ redirecting it to a file, so `format: sarif` alone gives a caller nothing to han
 mean redirecting stderr in step 7, which would also hide the JSON diagnostics from the log for everyone else,
 so it hasn't been done.
 
-`globs` are positional, so they are appended last and nothing may follow them in `BLOCKWATCH_ARGS`. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
+`globs` are positional, so they are appended last and nothing may follow them in the argument list. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
 
 ### Run mode
 
@@ -147,7 +171,16 @@ The default (`only_changed: false`) validates **every block in the repository** 
 - `push`: `${{ github.event.before }}...${{ github.sha }}`, falling back to `git diff-tree --patch --root -m --first-parent --no-commit-id <sha>` when `before` is all zeros (first push to a new branch). Every flag there is load-bearing: this was `git diff --patch --root <sha>`, but `--root` is a *diff-tree* option that `git diff` accepts silently rather than rejecting, so the command compared the working tree against `<sha>` — always a 0-byte patch on a clean checkout, making every `affects` check pass vacuously. `-m --first-parent` is what makes merge commits emit anything; without it `diff-tree` prints nothing for a merge and the empty patch returns whenever a new branch has a merge at its head. `--no-commit-id` suppresses the bare SHA line `git diff` never emits (blockwatch has tolerated it so far, but the pipeline shouldn't lean on that — it's outside the diff format blockwatch documents as its input contract). An empty-tree SHA would also work with `diff_pathspec` — contrary to what this file used to claim — but it renders `affects` useless, since a whole-tree patch marks both sides of every pair as modified. Only the head commit is covered; a new branch has no base, so earlier commits in the push are checked on the PR instead.
 - anything else: no diff exists, so the step runs a bare `blockwatch` — the same whole-tree scan as the default mode, minus the marks saying which blocks changed, and with `only_changed` inapplicable (the note says so unconditionally rather than reading the input). No `< /dev/null` guard is needed: without `--diff` blockwatch never touches stdin, so there is no descriptor to block on. This branch used to run only when `globs` was non-empty and warn otherwise, because a diff-less run with no globs checked nothing; since 0.4.0 a bare run scans the tree, so there is always real work to do. The comparison `affects` is built on still can't run here — with nothing marked as changed it has nothing to compare — though since 0.4.3 `affects` does check without a diff that every block it references still exists. If you add real support for a new event, add its branch above.
 
-`diff_pathspec` is intentionally unquoted (`-- $DIFF_PATHSPEC`) so callers can pass multiple space-separated pathspecs like `:(exclude).github/`; the `shellcheck disable=SC2086` comments mark this as deliberate.
+`diff_command` returns the command as a list, or `None` for an event that has no diff; the
+single call site in `run_blockwatch` is what makes one stderr capture possible (see
+[Reporting](#reporting)).
+
+`diff_pathspec` is split on whitespace with `str.split()`, so callers can still pass several
+pathspecs like `:(exclude).github/`. This replaced an unquoted `-- $DIFF_PATHSPEC` at each of the
+six former call sites: word splitting was the point there, but pathname expansion came with it, so
+a pathspec containing a glob was matched against the working directory before git ever saw it.
+Splitting a string keeps the one and drops the other, and there is no shell in this path at all
+now.
 
 ## Releasing
 
