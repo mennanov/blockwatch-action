@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
-"""Black-box tests for run.py.
+"""Black-box tests for run.py, against a real git repository and a real blockwatch.
 
-The script is run the way the action runs it — as a subprocess, configured
-entirely through the environment — and only its observable output is asserted:
-the workflow commands on stdout, the diagnostics replayed to stderr, the exit
-code, and the argv it hands to git and blockwatch. Nothing is imported from
-run.py, so these stay honest if its internals are rearranged.
+Nothing is stubbed, so these fail if blockwatch changes the shape of what it
+reports — line and column base, address format, the severity of a suppressed
+violation — instead of passing against a frozen copy of output. `blockwatch`
+must be on PATH.
 
-`git` and `blockwatch` are replaced by stubs on PATH. That keeps every test
-hermetic — no repository, no network, no blockwatch install — and lets a test
-assert on the exact command that *would* have run, which is where two of the
-nastier bugs in this action's history lived.
-
-Tests are ordered by importance, most critical first, and unittest is told to
-keep that order so the worst failure is the first one reported.
-
-    python3 scripts/run_test.py          # or: python3 -m pytest scripts/run_test.py
+python3 scripts/run_test.py          # or: python3 -m pytest scripts/run_test.py
 """
 
 from __future__ import annotations
@@ -26,57 +17,30 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
-from typing import Any
+from typing import Any, Dict
 
 RUN_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run.py")
+JsonObject = Dict[str, Any]
 
-# One violation, shaped exactly as blockwatch 0.5.x reports it: a 1-based range
-# with an inclusive end column, and the address to suppress it by.
-VIOLATION = {
-    "docs/cli.md": [
-        {
-            "range": {
-                "start": {"line": 12, "character": 1},
-                "end": {"line": 12, "character": 40},
-            },
-            "code": "keep-sorted",
-            "message": "Block docs/cli.md:cli-docs defined at line 9 has an out-of-order line 12 (asc)",
-            "severity": 1,
-            "address": "docs/cli.md:cli-docs:keep-sorted:35385fe8",
-        }
-    ]
-}
+# A sorted block, and the same block with its entries swapped. The violating
+# line is line 3 in both files; `- apple` is 7 characters, `- carrot` is 8.
+SORTED_FRUIT = '<!-- <block name="fruit" keep-sorted> -->\n- apple\n- banana\n<!-- </block> -->\n'
+UNSORTED_FRUIT = '<!-- <block name="fruit" keep-sorted> -->\n- banana\n- apple\n<!-- </block> -->\n'
+SORTED_VEG = '<!-- <block name="veg" keep-sorted> -->\n- carrot\n- potato\n<!-- </block> -->\n'
+UNSORTED_VEG = '<!-- <block name="veg" keep-sorted> -->\n- potato\n- carrot\n<!-- </block> -->\n'
 
-SARIF = {
-    "version": "2.1.0",
-    "runs": [
-        {
-            "results": [
-                {
-                    "ruleId": "keep-sorted",
-                    "level": "error",
-                    "message": {"text": "Block docs/cli.md:cli-docs defined at line 9 has an out-of-order line 12 (asc)"},
-                    "locations": [
-                        {
-                            "physicalLocation": {
-                                "artifactLocation": {"uri": "docs/cli.md"},
-                                "region": {
-                                    "startLine": 12,
-                                    "startColumn": 1,
-                                    "endLine": 12,
-                                    "endColumn": 40,
-                                },
-                            }
-                        }
-                    ],
-                    "properties": {"address": "docs/cli.md:cli-docs:keep-sorted:35385fe8"},
-                }
-            ]
-        }
-    ],
-}
+VIOLATING_LINE = "3"
+FRUIT_ADDRESS_PREFIX = "docs/a.md:fruit:keep-sorted:"
+
+
+def setUpModule() -> None:
+    if shutil.which("blockwatch") is None:
+        raise RuntimeError(
+            "blockwatch is not on PATH. These tests run the real binary, so that a "
+            "change to its output format fails here rather than in production. "
+            "Install it with: cargo binstall blockwatch"
+        )
 
 
 class Annotation:
@@ -91,190 +55,205 @@ class Annotation:
             key, _, value = pair.partition("=")
             self.properties[key] = value
 
+    @property
+    def address(self) -> str:
+        """The suppression address the annotation offers, if it carries one."""
+        _, _, address = self.message.partition("Suppress with: Blockwatch-suppress: ")
+        return address
+
     def __repr__(self) -> str:
         return "Annotation(%s, %r, %r)" % (self.level, self.properties, self.message)
 
 
 class Result:
-    """What one run of the script produced."""
-
-    def __init__(self, process: subprocess.CompletedProcess[str], calls_dir: str) -> None:
+    def __init__(self, process: subprocess.CompletedProcess[str]) -> None:
         self.exit_code = process.returncode
         self.stdout = process.stdout
         self.stderr = process.stderr
-        self._calls_dir = calls_dir
 
     @property
     def annotations(self) -> list[Annotation]:
         return [Annotation(line) for line in self.stdout.splitlines() if line.startswith("::")]
 
-    def argv(self, program: str) -> list[list[str]]:
-        """Every argv the named stub was called with, in order."""
-        path = os.path.join(self._calls_dir, program + ".jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
+    @property
+    def levels(self) -> list[str]:
+        return [a.level for a in self.annotations]
+
+    @property
+    def annotated_files(self) -> set[str]:
+        return {a.properties["file"] for a in self.annotations if "file" in a.properties}
 
 
 class ActionTestCase(unittest.TestCase):
-    """Shared setup: stubbed binaries, a fake event, and a way to run the script."""
+    """A throwaway repository, plus a way to run the script against it."""
 
     def setUp(self) -> None:
         self.workspace = tempfile.mkdtemp(prefix="blockwatch-action-test-")
         self.addCleanup(shutil.rmtree, self.workspace, True)
-        self.bin_dir = os.path.join(self.workspace, "bin")
-        self.calls_dir = os.path.join(self.workspace, "calls")
-        os.makedirs(self.bin_dir)
-        os.makedirs(self.calls_dir)
+        self.repo = os.path.join(self.workspace, "repo")
+        os.makedirs(os.path.join(self.repo, "docs"))
         self.summary_path = os.path.join(self.workspace, "summary.md")
 
-        # A diff that is never inspected: the stub blockwatch decides the
-        # outcome, so the patch only has to exist.
-        self.write_stub("git", stdout="diff --git a/docs/cli.md b/docs/cli.md\n")
-        self.write_stub("blockwatch", stderr=json.dumps(VIOLATION), exit_code=1)
+        # HOME points into the workspace and the system config is ignored, so no
+        # global git setting can change what these tests see.
+        self.git_env = dict(os.environ)
+        self.git_env.update(HOME=self.workspace, GIT_CONFIG_NOSYSTEM="1")
 
-    def write_stub(self, name: str, stdout: str = "", stderr: str = "", exit_code: int = 0) -> None:
-        """Put an executable on PATH that records its argv and emits fixed output."""
-        script = textwrap.dedent(
-            '''\
-            #!/usr/bin/env python3
-            import json, os, sys
-            record = os.path.join(%(calls)r, %(name)r + ".jsonl")
-            with open(record, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(sys.argv[1:]) + "\\n")
-            sys.stdout.write(%(stdout)r)
-            sys.stderr.write(%(stderr)r)
-            sys.exit(%(exit_code)d)
-            '''
-        ) % {
-            "calls": self.calls_dir,
-            "name": name,
-            "stdout": stdout,
-            "stderr": stderr,
-            "exit_code": exit_code,
-        }
-        path = os.path.join(self.bin_dir, name)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(script)
-        os.chmod(path, 0o755)
+        self.git("init", "-q")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Test")
+        self.git("config", "commit.gpgsign", "false")
+        self.write("docs/a.md", SORTED_FRUIT)
+        self.write("docs/b.md", SORTED_VEG)
+        self.write("docs/notes.md", "Prose with no blocks in it.\n")
+        self.base_sha = self.commit("initial")
 
-    def write_event(self, **payload: Any) -> str:
-        path = os.path.join(self.workspace, "event.json")
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle)
-        return path
+    def git(self, *args: str) -> str:
+        result = subprocess.run(
+            ["git"] + list(args),
+            cwd=self.repo,
+            env=self.git_env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
 
-    def run_action(self, event: str | None = None, **inputs: str) -> Result:
-        """Run the script with a clean environment, as the step would."""
-        environment = {
-            "PATH": self.bin_dir + os.pathsep + os.environ.get("PATH", ""),
-            "GITHUB_EVENT_NAME": "push",
-            "GITHUB_SHA": "f" * 40,
-            "GITHUB_STEP_SUMMARY": self.summary_path,
-            "GITHUB_EVENT_PATH": event or self.write_event(before="a" * 40),
-            # Left empty on purpose: with no token the script never reaches the
-            # network, so every test here is hermetic.
-            "GH_TOKEN": "",
-        }
+    def write(self, relative_path: str, content: str) -> None:
+        with open(os.path.join(self.repo, relative_path), "w", encoding="utf-8") as handle:
+            handle.write(content)
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def break_fruit(self, message: str = "break the fruit order") -> str:
+        self.write("docs/a.md", UNSORTED_FRUIT)
+        return self.commit(message)
+
+    def run_action(self, event: JsonObject | None = None, **inputs: str) -> Result:
+        event_path = os.path.join(self.workspace, "event.json")
+        with open(event_path, "w", encoding="utf-8") as handle:
+            json.dump(event if event is not None else {"before": self.base_sha}, handle)
+
+        environment = dict(self.git_env)
+        environment.update(
+            GITHUB_EVENT_NAME="push",
+            GITHUB_SHA=self.git("rev-parse", "HEAD"),
+            GITHUB_STEP_SUMMARY=self.summary_path,
+            GITHUB_EVENT_PATH=event_path,
+            # Empty on purpose: with no token the script never reaches the network.
+            GH_TOKEN="",
+        )
+        # Inherited INPUT_* would leak a developer's shell into the run.
+        for name in [n for n in environment if n.startswith("INPUT_")]:
+            del environment[name]
         environment.update(inputs)
+
         process = subprocess.run(
             [sys.executable, RUN_PY],
             env=environment,
             capture_output=True,
             text=True,
-            cwd=self.workspace,
+            cwd=self.repo,
         )
-        return Result(process, self.calls_dir)
+        return Result(process)
 
 
 class RunTest(ActionTestCase):
-    # ----------------------------------------------------------------- 1
     def test_violation_becomes_an_error_annotation_carrying_its_address(self) -> None:
-        """The feature itself: a violation lands on its own line, ready to act on."""
+        self.break_fruit()
+
         result = self.run_action()
 
-        annotations = result.annotations
-        self.assertEqual(len(annotations), 1, result.stdout)
-        annotation = annotations[0]
+        self.assertEqual(len(result.annotations), 1, result.stdout)
+        annotation = result.annotations[0]
         self.assertEqual(annotation.level, "error")
-        self.assertEqual(annotation.properties["file"], "docs/cli.md")
-        self.assertEqual(annotation.properties["line"], "12")
-        self.assertEqual(annotation.properties["endLine"], "12")
-        # A single-line violation keeps its columns; GitHub ignores them on a
-        # multi-line annotation.
+        self.assertEqual(annotation.properties["file"], "docs/a.md")
+        self.assertEqual(annotation.properties["line"], VIOLATING_LINE)
+        self.assertEqual(annotation.properties["endLine"], VIOLATING_LINE)
+        # 1-based columns with an inclusive end, which is what GitHub wants.
         self.assertEqual(annotation.properties["col"], "1")
-        self.assertEqual(annotation.properties["endColumn"], "40")
+        self.assertEqual(annotation.properties["endColumn"], "7")
         self.assertEqual(annotation.properties["title"], "blockwatch%3A keep-sorted")
-        self.assertIn("out-of-order line 12", annotation.message)
-        # The address appears nowhere else on the line, and is what a reader
-        # needs in order to suppress it.
-        self.assertIn(
-            "Suppress with: Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8",
-            annotation.message,
+        self.assertIn("out-of-order line 3", annotation.message)
+        self.assertTrue(
+            annotation.address.startswith(FRUIT_ADDRESS_PREFIX), annotation.message
         )
+        self.assertTrue(annotation.address[len(FRUIT_ADDRESS_PREFIX):], "address has no hash")
 
-    # ----------------------------------------------------------------- 2
     def test_exit_code_is_blockwatch_s_own(self) -> None:
-        """Reporting must never decide the verdict — in either direction."""
+        self.break_fruit()
         self.assertEqual(self.run_action().exit_code, 1)
 
-        self.write_stub("blockwatch", stderr="", exit_code=0)
+        # A commit that changes something without breaking a block: the diff is
+        # real, so blockwatch runs and finds nothing.
+        self.write("docs/a.md", SORTED_FRUIT)
+        self.write("docs/notes.md", "Prose, revised.\n")
+        self.commit("restore the order")
+
         clean = self.run_action()
         self.assertEqual(clean.exit_code, 0)
         self.assertEqual(clean.annotations, [])
 
-    # ----------------------------------------------------------------- 3
     def test_suppressed_violation_becomes_a_notice_annotation(self) -> None:
-        """A suppressed violation is still reported, but must not block."""
-        suppressed = json.loads(json.dumps(VIOLATION))
-        suppressed["docs/cli.md"][0]["suppressed"] = True
-        self.write_stub("blockwatch", stderr=json.dumps(suppressed), exit_code=0)
+        self.break_fruit()
+
+        result = self.run_action(INPUT_SUPPRESS="docs/a.md")
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.levels, ["notice"])
+
+    def test_commit_message_can_suppress_a_violation_it_introduces(self) -> None:
+        self.break_fruit("break the order\n\nBlockwatch-suppress: docs/a.md\n")
 
         result = self.run_action()
 
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual([a.level for a in result.annotations], ["notice"])
+        self.assertEqual(result.levels, ["notice"])
+        # This changes the outcome while appearing nowhere in the workflow file,
+        # so the log has to say it happened.
+        self.assertIn("suppression addresses found", result.stdout)
 
-    # ----------------------------------------------------------------- 4
-    def test_unparseable_diagnostics_are_replayed_but_not_annotated(self) -> None:
-        """A usage error arrives on the same stream and must survive untouched."""
-        self.write_stub("blockwatch", stderr="Error: diff in stdin is empty.\n", exit_code=2)
+    def test_empty_diff_fails_the_step_without_annotating(self) -> None:
+        self.break_fruit()
 
-        result = self.run_action()
+        # The pathspec excludes everything the commit touched, so git produces no
+        # patch and blockwatch refuses to guess.
+        result = self.run_action(INPUT_DIFF_PATHSPEC=":(exclude)docs/**")
 
-        self.assertEqual(result.exit_code, 2)
-        self.assertIn("diff in stdin is empty.", result.stderr)
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("diff in stdin is empty", result.stderr)
         self.assertEqual(result.annotations, [])
 
-    # ----------------------------------------------------------------- 5
     def test_annotations_limit_caps_output_and_reports_the_remainder(self) -> None:
-        """GitHub drops annotations past its own cap silently; this one says so."""
-        many = {"docs/cli.md": VIOLATION["docs/cli.md"] * 3}
-        self.write_stub("blockwatch", stderr=json.dumps(many), exit_code=1)
+        self.write("docs/a.md", UNSORTED_FRUIT)
+        self.write("docs/b.md", UNSORTED_VEG)
+        self.commit("break both")
 
         result = self.run_action(INPUT_ANNOTATIONS_LIMIT="1")
 
-        levels = [a.level for a in result.annotations]
-        self.assertEqual(levels, ["error", "notice"])
-        self.assertIn("2 further violation(s) were not annotated", result.annotations[1].message)
+        self.assertEqual(result.levels, ["error", "notice"])
+        self.assertIn("1 further violation(s) were not annotated", result.annotations[1].message)
 
-    # ----------------------------------------------------------------- 6
     def test_sarif_diagnostics_produce_the_same_annotation(self) -> None:
-        """format and annotations are orthogonal: both parsers agree."""
-        self.write_stub("blockwatch", stderr=json.dumps(SARIF), exit_code=1)
+        self.break_fruit()
 
         result = self.run_action(INPUT_FORMAT="sarif")
 
         self.assertEqual(len(result.annotations), 1, result.stdout)
         annotation = result.annotations[0]
         self.assertEqual(annotation.level, "error")
-        self.assertEqual(annotation.properties["file"], "docs/cli.md")
-        self.assertEqual(annotation.properties["line"], "12")
-        self.assertIn("docs/cli.md:cli-docs:keep-sorted:35385fe8", annotation.message)
+        self.assertEqual(annotation.properties["file"], "docs/a.md")
+        self.assertEqual(annotation.properties["line"], VIOLATING_LINE)
+        self.assertEqual(annotation.properties["col"], "1")
+        self.assertEqual(annotation.properties["endColumn"], "7")
+        self.assertTrue(annotation.address.startswith(FRUIT_ADDRESS_PREFIX), annotation.message)
 
-    # ----------------------------------------------------------------- 7
     def test_annotations_can_be_turned_off_without_affecting_the_verdict(self) -> None:
+        self.break_fruit()
+
         result = self.run_action(INPUT_ANNOTATIONS="false", INPUT_SUMMARY="false")
 
         self.assertEqual(result.annotations, [])
@@ -282,63 +261,38 @@ class RunTest(ActionTestCase):
         # The diagnostics still reach the log; only the reporting is off.
         self.assertIn("keep-sorted", result.stderr)
 
-    # ----------------------------------------------------------------- 8
-    def test_globs_are_passed_last_and_list_inputs_are_split(self) -> None:
-        """Globs are positional: anything appended after them changes their meaning."""
-        result = self.run_action(
-            INPUT_GLOBS="**/*.md, **/*.yml",
-            INPUT_IGNORE="target/**\ndist/**",
-            INPUT_ENABLE="keep-sorted",
-        )
+    def test_globs_narrow_the_run(self) -> None:
+        self.write("docs/a.md", UNSORTED_FRUIT)
+        self.write("docs/b.md", UNSORTED_VEG)
+        self.commit("break both")
 
-        argv = result.argv("blockwatch")[0]
-        self.assertEqual(argv[-2:], ["**/*.md", "**/*.yml"])
-        self.assertEqual(argv.count("--ignore"), 2)
-        self.assertIn("dist/**", argv)
-        self.assertEqual(argv[argv.index("-e") + 1], "keep-sorted")
-        # The suppression file the step builds is one more --suppress-from, and
-        # it has to land before the positional globs.
-        self.assertLess(argv.index("--suppress-from"), argv.index("**/*.md"))
+        # Globs are positional. verbosity and the suppression file are appended
+        # before them; if that order inverts, blockwatch reads a flag's value as
+        # a path and this narrowing stops working.
+        result = self.run_action(INPUT_GLOBS="docs/a.md", INPUT_VERBOSITY="summary")
 
-    # ----------------------------------------------------------------- 9
-    def test_push_to_a_new_branch_diffs_with_diff_tree(self) -> None:
-        """`git diff --root` silently compares the working tree — an empty patch."""
-        event = self.write_event(before="0" * 40)
+        self.assertEqual(result.annotated_files, {"docs/a.md"})
 
-        result = self.run_action(event=event)
+    def test_push_to_a_new_branch_still_produces_a_diff(self) -> None:
+        self.break_fruit()
 
-        diff = [call for call in result.argv("git") if call[0] in ("diff", "diff-tree")][0]
-        self.assertEqual(diff[0], "diff-tree")
-        for flag in ("--root", "-m", "--first-parent", "--no-commit-id"):
-            self.assertIn(flag, diff)
+        result = self.run_action(event={"before": "0" * 40})
 
-    # ---------------------------------------------------------------- 10
+        # `git diff --root` would silently compare the working tree and hand
+        # blockwatch an empty patch; diff-tree is what makes this reach a check.
+        self.assertEqual(result.levels, ["error"])
+        self.assertNotIn("diff in stdin is empty", result.stderr)
+
     def test_invalid_boolean_input_fails_the_step(self) -> None:
-        """Reading `yes` as false would turn reporting off without a word."""
+        self.break_fruit()
+
         result = self.run_action(INPUT_ANNOTATIONS="yes")
 
         self.assertEqual(result.exit_code, 1)
         self.assertIn("annotations", result.stderr)
-        self.assertEqual(result.argv("blockwatch"), [])
-
-
-def _by_definition_order(first: str, second: str) -> int:
-    """Order test methods as they are written, which here is by importance.
-
-    Setting `sortTestMethodsUsing = None` does not do this: unittest builds its
-    list from `dir()`, which is alphabetical already, so the names have to be
-    compared by the line they are defined on.
-    """
-    lines: tuple[int, int] = (
-        getattr(RunTest, first).__code__.co_firstlineno,
-        getattr(RunTest, second).__code__.co_firstlineno,
-    )
-    return (lines[0] > lines[1]) - (lines[0] < lines[1])
+        self.assertEqual(result.annotations, [])
 
 
 if __name__ == "__main__":
-    # The most critical failure should be the first one reported. pytest runs in
-    # definition order already; this is for `python3 scripts/run_test.py`.
     loader = unittest.TestLoader()
-    loader.sortTestMethodsUsing = _by_definition_order
     unittest.main(testLoader=loader, verbosity=2)

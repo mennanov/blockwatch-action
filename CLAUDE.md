@@ -54,16 +54,23 @@ python3 scripts/run_test.py     # or: python3 -m pytest scripts/run_test.py
 mypy --strict scripts/run.py scripts/run_test.py
 ```
 
-The tests run the script as a subprocess with `git` and `blockwatch` replaced by stubs on `PATH`,
-so they need no repository, no network and no blockwatch install, and they import nothing from
-`run.py` — rearranging its internals must not touch them. The stubs record their argv, which is how
-the two invariants with a history of breaking silently are checked: that `globs` stay last, and
-that a first push to a new branch uses `diff-tree` rather than `git diff --root`.
+The tests run the script as a subprocess against a **real git repository and the real blockwatch
+binary** — nothing is stubbed, and the module refuses to run if `blockwatch` is not on `PATH`. That
+is the point of them: a stub would freeze a copy of blockwatch's output, and the failure worth
+catching is the one where a new release changes the line and column base, the address format, or
+the severity of a suppressed violation, leaving the action exiting with the right code while
+annotating the wrong thing. Assertions like `endColumn == 7` for `- apple` are reading the real
+contract, so update them only against real output.
 
-They are ordered by importance, most critical first, and the loader compares definition lines to
-keep that order at run time — `sortTestMethodsUsing = None` would not, since unittest builds its
-list from `dir()`, which is already alphabetical. Coverage is deliberately partial: the ten cases
-are the ones whose failure would be worst, not every branch. The job summary is not among them.
+They import nothing from `run.py` — rearranging its internals must not touch them — and each test
+builds its own repository with `HOME` redirected into it, so no global git config reaches in. The
+invariants with a history of breaking silently are checked behaviourally: that `globs` still narrow
+a run (so nothing was appended after the positionals), and that a first push to a new branch reports
+its violation rather than dying on the empty patch `git diff --root` used to produce.
+
+The file is ordered by importance, most critical first; unittest still runs them alphabetically.
+Coverage is deliberately partial: the eleven cases are the ones whose failure would be worst, not
+every branch. The job summary is not among them.
 
 Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
 import annotations` keeps lazy, so they cost nothing at runtime on an older interpreter. The one
