@@ -373,6 +373,8 @@ class Violation:
     start_line: int
     end_line: int
     start_column: int
+    # Inclusive, as GitHub wants it — already converted from the half-open
+    # range blockwatch reports. See github_end_column.
     end_column: int
     level: str
     code: str
@@ -385,6 +387,23 @@ class Violation:
         # GitHub renders a column range only within one line and ignores one
         # that spans several. Column 0 means blockwatch reported no column.
         return bool(self.start_line == self.end_line and self.start_column and self.end_column)
+
+
+def github_end_column(start_column: int, end_column: int) -> int:
+    """Turn blockwatch's exclusive end column into GitHub's inclusive one.
+
+    Since blockwatch 0.6.0 a range is half-open, `[start, end)`, in the JSON
+    diagnostics and in SARIF alike, so the last highlighted character sits one
+    before the reported end; GitHub's `endColumn` names that character itself.
+    Passing the value straight through highlighted one character too many.
+
+    Zero means blockwatch reported no column at all and stays zero, which is
+    what `single_line` reads to leave the range off. A zero-width range is
+    held at the start column rather than inverted.
+    """
+    if not end_column:
+        return 0
+    return max(start_column, end_column - 1)
 
 
 def level_for(suppressed: bool, severity: int | None) -> str:
@@ -413,7 +432,7 @@ def parse_json_diagnostics(document: JsonObject) -> Iterator[Violation]:
                 start_line=start.get("line", 1),
                 end_line=end.get("line", start.get("line", 1)),
                 start_column=start.get("character", 0),
-                end_column=end.get("character", 0),
+                end_column=github_end_column(start.get("character", 0), end.get("character", 0)),
                 level=level_for(suppressed, entry.get("severity", 1)),
                 code=entry.get("code", "blockwatch"),
                 address=entry.get("address", ""),
@@ -438,7 +457,9 @@ def parse_sarif(document: JsonObject) -> Iterator[Violation]:
                 start_line=region.get("startLine", 1),
                 end_line=region.get("endLine", region.get("startLine", 1)),
                 start_column=region.get("startColumn", 0),
-                end_column=region.get("endColumn", 0),
+                end_column=github_end_column(
+                    region.get("startColumn", 0), region.get("endColumn", 0)
+                ),
                 level=level_for(suppressed, severity),
                 code=result.get("ruleId", "blockwatch"),
                 address=(result.get("properties") or {}).get("address", ""),

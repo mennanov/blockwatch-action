@@ -4,8 +4,10 @@
 Real repository, real blockwatch, but the assertions are only about run.py —
 annotations, exit code, input handling. blockwatch's own contract (columns,
 address format, message wording) is read back from the diagnostics it emitted,
-never hardcoded, so a change there is not a failure here. `blockwatch` must be
-on PATH.
+never hardcoded, so a change there is not a failure here. The one exception is
+the half-open range convention, which run.py exists to translate: the column
+test asserts the conversion, so a blockwatch that stopped reporting an
+exclusive end would rightly fail it. `blockwatch` must be on PATH.
 
 python3 scripts/run_test.py          # or: python3 -m pytest scripts/run_test.py
 """
@@ -178,8 +180,9 @@ class RunTest(ActionTestCase):
         self.assertEqual(annotation.properties["line"], str(entry["range"]["start"]["line"]))
         self.assertEqual(annotation.properties["endLine"], str(entry["range"]["end"]["line"]))
         self.assertEqual(annotation.properties["col"], str(entry["range"]["start"]["character"]))
+        # blockwatch reports a half-open range but GitHub's endColumn is inclusive.
         self.assertEqual(
-            annotation.properties["endColumn"], str(entry["range"]["end"]["character"])
+            annotation.properties["endColumn"], str(entry["range"]["end"]["character"] - 1)
         )
         self.assertEqual(annotation.properties["title"], "blockwatch%3A " + entry["code"])
         self.assertIn(entry["message"], annotation.message)

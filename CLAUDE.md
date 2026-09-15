@@ -294,9 +294,13 @@ The mechanics, in the order they bite:
   CR and LF in the message; additionally `:` and `,` in property values, since a comma
   starts the next property and a file path may legitimately contain one.
 - **A column range is emitted only when the violation sits on one line.** GitHub ignores
-  `col`/`endColumn` on a multi-line annotation. blockwatch's ranges are 1-based with an
-  *inclusive* end column, which is what GitHub wants; note this differs from SARIF's own
-  spec, where `endColumn` is exclusive.
+  `col`/`endColumn` on a multi-line annotation. blockwatch's ranges are 1-based and, since
+  0.6.0, *half-open* — `[start, end)` in the JSON diagnostics and in SARIF alike, matching
+  SARIF's and LSP's own conventions. GitHub's `endColumn` is inclusive, so `github_end_column`
+  decrements it in both parsers, on the way in, which keeps everything downstream speaking
+  GitHub's dialect. Before 0.6.0 the end column was inclusive and was passed straight through;
+  a run.py that kept doing that against 0.6.0 highlights one character too many. Column 0 still
+  means "no column reported" and is left alone.
 - **Suppressed violations become notices, not errors**, because they do not fail the run,
   and the annotation carries the violation's suppression address when the block has a name
   (unnamed blocks have no address). That address is otherwise only in the JSON.
