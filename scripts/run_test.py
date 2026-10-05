@@ -136,14 +136,16 @@ class ActionTestCase(unittest.TestCase):
         self.write("docs/a.md", UNSORTED_FRUIT)
         return self.commit(message)
 
-    def run_action(self, event: JsonObject | None = None, **inputs: str) -> Result:
+    def run_action(
+        self, event: JsonObject | None = None, event_name: str = "push", **inputs: str
+    ) -> Result:
         event_path = os.path.join(self.workspace, "event.json")
         with open(event_path, "w", encoding="utf-8") as handle:
             json.dump(event if event is not None else {"before": self.base_sha}, handle)
 
         environment = dict(self.git_env)
         environment.update(
-            GITHUB_EVENT_NAME="push",
+            GITHUB_EVENT_NAME=event_name,
             GITHUB_SHA=self.git("rev-parse", "HEAD"),
             GITHUB_STEP_SUMMARY=self.summary_path,
             GITHUB_EVENT_PATH=event_path,
@@ -204,6 +206,34 @@ class RunTest(ActionTestCase):
         self.assertEqual(clean.exit_code, 0)
         self.assertEqual(clean.annotations, [])
 
+    def test_failed_diff_fails_the_step_without_running_blockwatch(self) -> None:
+        self.break_fruit()
+
+        # A base branch the clone does not have: git cannot produce the diff.
+        result = self.run_action(
+            event={"pull_request": {"number": 1}},
+            event_name="pull_request",
+            GITHUB_BASE_REF="no-such-branch",
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("no diff to check", result.stderr)
+        # Falling back to a scan here would hide that the diff was never read.
+        self.assertEqual(result.annotations, [])
+
+    def test_empty_diff_still_checks_every_block(self) -> None:
+        self.break_fruit()
+        before = self.git("rev-parse", "HEAD")
+        self.git("commit", "-q", "--allow-empty", "-m", "retrigger CI")
+
+        result = self.run_action(event={"before": before})
+
+        # Nothing changed, which is no reason to pass: the violation the branch
+        # already carries is still found.
+        self.assertIn("diff for this event is empty", result.stdout)
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.levels, ["error"])
+
     def test_commit_message_can_suppress_a_violation_it_introduces(self) -> None:
         self.break_fruit("break the order\n\nBlockwatch-suppress: docs/a.md\n")
 
@@ -250,10 +280,10 @@ class RunTest(ActionTestCase):
     def test_output_that_is_not_diagnostics_is_replayed_but_not_annotated(self) -> None:
         self.break_fruit()
 
-        # The pathspec excludes everything the commit touched, so git produces no
-        # patch and blockwatch answers with a plain-text usage error instead of
-        # a document. Whatever it says has to reach the log unparsed.
-        result = self.run_action(INPUT_DIFF_PATHSPEC=":(exclude)docs/**")
+        # An address of five segments, where blockwatch takes at most four, is
+        # refused with a plain-text usage error instead of a document. Whatever
+        # it says has to reach the log unparsed.
+        result = self.run_action(INPUT_SUPPRESS="docs/a.md:fruit:keep-sorted:0:extra")
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertTrue(result.stderr.strip())
@@ -265,8 +295,37 @@ class RunTest(ActionTestCase):
         result = self.run_action(event={"before": "0" * 40})
 
         # `git diff --root` would silently compare the working tree and hand
-        # blockwatch an empty patch; diff-tree is what makes this reach a check.
+        # blockwatch an empty patch; diff-tree is what makes this reach a check
+        # through the diff rather than through the empty-diff scan.
+        self.assertNotIn("diff for this event is empty", result.stdout)
         self.assertEqual(result.levels, ["error"])
+
+    def test_force_push_checks_the_head_commit_and_reads_its_message(self) -> None:
+        self.break_fruit("break the order\n\nBlockwatch-suppress: docs/a.md\n")
+
+        # The tip a force-push replaced is on no branch, so the checkout never
+        # fetched it: here, a commit the repository does not have.
+        result = self.run_action(event={"before": "f" * 40, "forced": True})
+
+        self.assertNotIn("diff for this event is empty", result.stdout)
+        # The suppression comes from the head commit's message, so this also
+        # shows the messages read fell back to the same commit as the diff.
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.levels, ["notice"])
+
+    def test_merge_at_a_new_branch_head_is_diffed_against_its_first_parent(self) -> None:
+        self.git("checkout", "-q", "-b", "side")
+        self.write("docs/b.md", UNSORTED_VEG)
+        self.commit("break the veg order")
+        self.git("checkout", "-q", "-")
+        self.break_fruit()
+        self.git("merge", "-q", "--no-edit", "side")
+
+        result = self.run_action(event={"before": "0" * 40}, INPUT_ONLY_CHANGED="true")
+
+        # What the merge brought in is side's change. The fruit was broken on
+        # the first parent before it, so only_changed must not reach it.
+        self.assertEqual(list(result.diagnostics), ["docs/b.md"])
 
     def test_invalid_boolean_input_fails_the_step(self) -> None:
         self.break_fruit()

@@ -12,19 +12,20 @@ A single **composite GitHub Action** that installs and runs the [`blockwatch`](h
 # Simulate an event — the action takes a different diff path per event
 act workflow_dispatch -W .github/workflows/local-test.yml
 # pull_request also needs a payload: act synthesizes one with no base ref, so
-# the diff resolves `origin/...<sha>` and dies on "ambiguous argument". Name a
-# base that is actually behind the head, or the diff comes out empty instead.
+# the diff resolves `origin/...<sha>`, git dies on "ambiguous argument", and
+# every step fails with it. Name a base that is actually behind the head, or the
+# diff comes out empty and every step scans without it instead.
 printf '{"pull_request": {"base": {"ref": "BASE_BRANCH"}, "head": {"ref": "main"}}}' > /tmp/pr.json
 act pull_request -W .github/workflows/local-test.yml -e /tmp/pr.json
 
-# push needs a payload: act synthesizes one with no `before`, so the diff comes
-# out empty and every step dies on "diff in stdin is empty." before it runs
-# blockwatch. Give it two real revisions instead.
+# push without a payload works, but act sends no `before`, which the step reads
+# as a new branch: only the head commit is diffed. Give it two real revisions to
+# exercise the range diff instead.
 printf '{"before": "%s", "after": "%s"}' "$(git rev-parse HEAD~1)" "$(git rev-parse HEAD)" > /tmp/push.json
 act push -W .github/workflows/local-test.yml -e /tmp/push.json
 ```
 
-The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failure — use one of the forms above.
+The bare `act -W ...` defaults to `push`, so it takes that same head-commit path.
 
 `act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `config`, `only_changed`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
 
@@ -82,7 +83,7 @@ review and in the flag table above.
 They import nothing from `run.py` — rearranging its internals must not touch them — and each test
 builds its own repository with `HOME` redirected into it, so no global git config reaches in. The
 file is ordered by importance, most critical first; unittest still runs them alphabetically.
-Coverage is deliberately partial: the nine cases are the ones whose failure would be worst, not
+Coverage is deliberately partial: the thirteen cases are the ones whose failure would be worst, not
 every branch. The job summary is not among them.
 
 Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
@@ -214,12 +215,13 @@ commit that needs it. It collects the commit messages under test and, on a pull 
 and appends one more `--suppress-from` for the result; no extraction is needed, since blockwatch already
 ignores every line that isn't an address. Three details are load-bearing:
 
-- **The revision range mirrors the diff.** `BEFORE_SHA`/`CURRENT_SHA`/`ZERO_SHA` are resolved once, above
-  both this block and the diff dispatch, precisely so the two cannot drift: what is allowed to suppress a
-  violation is the same work that is being checked for one. `git log` uses two dots where the diff uses
-  three — it wants the commits a PR adds, not a patch. A new branch falls back to the head commit alone,
-  matching the diff's own coverage, and an event with no diff reads `HEAD` so that a `workflow_dispatch`
-  re-run behaves like the push that first checked that commit.
+- **The revision range mirrors the diff.** `push_base` resolves where a push starts once, in `main`, and
+  both `git_log_messages` and `diff_command` take its result, precisely so the two cannot drift: what is
+  allowed to suppress a violation is the same work that is being checked for one. `git log` uses two dots
+  where the diff uses three — it wants the commits a PR adds, not a patch. A new branch, or a force-push
+  whose replaced tip is not in the clone, falls back to the head commit alone, matching the diff's own
+  coverage, and an event with no diff reads `HEAD` so that a `workflow_dispatch` re-run behaves like the
+  push that first checked that commit.
 - **The PR description is read from the API at run time, with the event payload as the fallback.** The
   payload is a snapshot taken when the run was created, and re-running a workflow replays it — so a
   suppression added to the description afterwards would be invisible until the next push, which defeats
@@ -287,13 +289,12 @@ The mechanics, in the order they bite:
   diagnostics requires capturing them, and the JSON a reader used to copy out of the log
   has to stay there, so the file is `cat`-ed back after the run. The only visible cost is
   ordering: diagnostics now print after the stdout report instead of interleaved with it.
-- **The exit code is taken before any reporting and re-raised at the end.** A composite
-  action's bash runs with `-eo pipefail`, so the run is wrapped in `set +e`/`set -e` and
-  `$STATUS` carries blockwatch's own code past the reporting to the final `exit`
-  — pipefail reports the rightmost failure, so a git failure surfaces only if blockwatch
-  somehow exited 0; an empty diff it raises as an error of its own. Reporting failures are caught with `if ! report` and
-  downgraded to a warning: the violations are in the log either way, and an annotator bug
-  must not turn a passing run into a failing one, or the reverse.
+- **The exit code is taken before any reporting and returned at the end.** `main` carries
+  blockwatch's own code past the reporting. git is checked on its own before blockwatch
+  runs — a failed diff fails the step with git's error and blockwatch never starts (see
+  [Run mode](#run-mode)) — so blockwatch's is the only code left to carry. Reporting
+  failures are caught and downgraded to a warning: the violations are in the log either
+  way, and an annotator bug must not turn a passing run into a failing one, or the reverse.
 - **Which parser runs is decided by the `format` input, never by sniffing the document.**
   The JSON diagnostics are keyed by file path, so a repository containing a file named
   `runs` would otherwise read as a SARIF log. Both filters emit the same 10 fields, so
@@ -337,12 +338,26 @@ The default (`only_changed: false`) validates **every block in the repository** 
 
 `only_changed: true` makes the diff the scope again, exactly as before 0.4.0, and both of those revert with it.
 
-**An empty diff fails the step** in either mode (`diff in stdin is empty.`), where it used to pass silently. `diff_pathspec` excluding everything a push touched, and a force-push resetting to an older commit, are the two realistic ways to hit it. A guard was considered and rejected — a linter that silently passes on an input it cannot read is the failure mode 0.4.0 exists to remove.
+**An empty diff falls back to a run without it.** blockwatch rejects one (`diff in stdin is empty.`), so `run_blockwatch` writes the diff to a file first and checks two things, which must stay distinct:
+
+- **git's exit code.** A failure — a revision the clone lacks, or a git that dies partway and leaves a shorter but well-formed patch — fails the step with git's error, and blockwatch never runs. Scanning anyway here would be the failure mode 0.4.0 exists to remove: a linter that silently passes on an input it could not read.
+- **Then the size.** A diff git produced successfully and left empty means nothing in the range changed a file: empty commits (a CI retrigger), changes that cancel out, a pull request already applied to its base, a reset to a tip another branch still holds, or `diff_pathspec` excluding everything. blockwatch then runs bare, as on an event with no diff, and the log says so. Without changes `affects` has nothing to compare anyway; `only_changed` checks every block instead of none, which errs strict.
+
+This used to fail the step outright. A guard was rejected then because the shell pipe could not tell an empty diff from an unreadable one; checking git's code separately is what makes the distinction, and blockwatch's own pre-commit hooks made the same change in 0.8.0. The size check is the file's length, not blockwatch's `trim().is_empty()`: git never prints whitespace alone, and if it did, blockwatch would reject it loudly rather than pass it.
 
 ### Diff selection per event
 
 - `pull_request`: `origin/${{ github.base_ref }}...${{ github.sha }}`
-- `push`: `${{ github.event.before }}...${{ github.sha }}`, falling back to `git diff-tree --patch --root -m --first-parent --no-commit-id <sha>` when `before` is all zeros (first push to a new branch). Every flag there is load-bearing: this was `git diff --patch --root <sha>`, but `--root` is a *diff-tree* option that `git diff` accepts silently rather than rejecting, so the command compared the working tree against `<sha>` — always a 0-byte patch on a clean checkout, making every `affects` check pass vacuously. `-m --first-parent` is what makes merge commits emit anything; without it `diff-tree` prints nothing for a merge and the empty patch returns whenever a new branch has a merge at its head. `--no-commit-id` suppresses the bare SHA line `git diff` never emits (blockwatch has tolerated it so far, but the pipeline shouldn't lean on that — it's outside the diff format blockwatch documents as its input contract). An empty-tree SHA would also work with `diff_pathspec` — contrary to what this file used to claim — but it renders `affects` useless, since a whole-tree patch marks both sides of every pair as modified. Only the head commit is covered; a new branch has no base, so earlier commits in the push are checked on the PR instead.
+- `push`: `${{ github.event.before }}...${{ github.sha }}`. `push_base` returns no `before` in two cases, and both fall back to the head commit alone (`head_commit_diff`):
+  - **All zeros**: the push created a branch, so there is no prior tip.
+  - **Not in the clone**: a force-push. The tip it replaced is on no branch or tag, and `actions/checkout` fetches only those, so the three-dot diff died with `Invalid symmetric difference expression` on every amend, rebase or reset pushed to a branch with a `push` trigger. `git cat-file -e` detects it. The payload's `forced` flag is not used: a forced push whose old tip is still reachable diffs fine.
+
+  `head_commit_diff` runs `git diff-tree --patch <sha>^1 <sha>`, or `git diff-tree --patch --root --no-commit-id <sha>` for a root commit. Every part is load-bearing:
+  - **diff-tree, not `git diff`, for the root.** This was `git diff --patch --root <sha>`, but `--root` is a *diff-tree* option that `git diff` accepts silently rather than rejecting, so the command compared the working tree against `<sha>` — always a 0-byte patch on a clean checkout, making every `affects` check pass vacuously.
+  - **The first parent is named, not selected by a flag.** This was `-m --first-parent`, but `--first-parent` steers a history walk and diff-tree ignores it: `-m` printed one patch per parent, concatenated, and blockwatch kept the last section per file — the second parent's — so a merge at a new branch's head marked the wrong blocks as changed. `--diff-merges=first-parent` works but needs git 2.31, and the README promises 2.18. A merge whose result equals its first parent (`-s ours`) now correctly diffs empty.
+  - **`--no-commit-id`** suppresses the bare SHA line the single-commit form prints and `git diff` never emits (blockwatch has tolerated it so far, but the pipeline shouldn't lean on that — it's outside the diff format blockwatch documents as its input contract). The two-tree form prints none.
+
+  An empty-tree SHA would also work with `diff_pathspec` — contrary to what this file used to claim — but it renders `affects` useless, since a whole-tree patch marks both sides of every pair as modified. Only the head commit is covered; earlier commits in the push are checked on the PR instead.
 - anything else: no diff exists, so the step runs a bare `blockwatch` — the same whole-tree scan as the default mode, minus the marks saying which blocks changed, and with `only_changed` inapplicable (the note says so unconditionally rather than reading the input). No `< /dev/null` guard is needed: without `--diff` blockwatch never touches stdin, so there is no descriptor to block on. This branch used to run only when `globs` was non-empty and warn otherwise, because a diff-less run with no globs checked nothing; since 0.4.0 a bare run scans the tree, so there is always real work to do. The comparison `affects` is built on still can't run here — with nothing marked as changed it has nothing to compare — though since 0.4.3 `affects` does check without a diff that every block it references still exists. If you add real support for a new event, add its branch above.
 
 `diff_command` returns the command as a list, or `None` for an event that has no diff; the

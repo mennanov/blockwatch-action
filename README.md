@@ -55,6 +55,14 @@ On `push` and `pull_request` events, the action generates a git diff and feeds i
 
 Events without a diff (e.g. `workflow_dispatch`, `schedule`) scan the full repository, and `only_changed` is ignored.
 
+Which diff is used:
+
+- **Pull request**: everything the pull request changes, against the point where it left its base branch.
+- **Push**: everything since the branch's previous tip.
+- **Push that creates a branch, or force-push**: only the head commit, against its first parent. A force-push replaces the previous tip, which then exists on no branch and is not fetched.
+
+A diff that comes out empty (empty commits, changes that cancel out, or a `diff_pathspec` that excludes everything) is not an error: the repository is scanned without it, as on an event with no diff. A diff git fails to produce fails the step with git's own error.
+
 ## Config file
 
 blockwatch reads the settings a project always uses from `blockwatch.toml` at the repository root, so the action, a pre-commit hook and local runs share one copy. The action picks it up with no input. Set `config` to read another file instead, relative to the repository root. See the [blockwatch documentation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#config-file) for the keys.
@@ -151,11 +159,11 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 
 ## Known limitations
 
-- **Empty diffs fail the step**: If `diff_pathspec` excludes all changed files, or after certain force-pushes, git produces an empty diff. blockwatch treats an empty diff input as an error.
+- **Empty diffs scan without the diff**: When the changes cancel out, the commits are empty, or `diff_pathspec` excludes every changed file, the repository is checked as on an event with no diff, so `affects` has nothing to compare and `only_changed` does not apply.
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
 - **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `Blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
 - **Malformed suppression syntax**: A line starting with `Blockwatch-suppress:` with invalid address syntax will fail the step.
-- **Initial push on new branch**: Because GitHub provides no previous base commit for a newly pushed branch, only the head commit is diffed against its parent. Earlier commits in that push are checked once a PR is opened.
+- **Initial push on new branch, and force-pushes**: GitHub provides no previous base commit for a newly pushed branch, and the one a force-push replaced is no longer fetched, so only the head commit is diffed against its first parent, and only its message is read for suppressions. Earlier commits in that push are checked once a PR is opened.
 - **Annotations appear inline only on changed lines**: GitHub renders an annotation in
   the *Files changed* tab only where the pull request touches that line. In the default
   mode (`only_changed: "false"`) the whole repository is checked, so a violation in a file

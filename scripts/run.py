@@ -168,7 +168,38 @@ def pull_request_body(payload: JsonObject) -> tuple[str, str]:
         return snapshot, "the event payload (the API read failed: %s)" % error
 
 
-def git_log_messages(event_name: str, payload: JsonObject, current_sha: str) -> list[str]:
+def push_base(event_name: str, payload: JsonObject) -> str | None:
+    """The tip a push diffs from, or None when only its head commit can be checked.
+
+    Resolved once, for both the diff and the commit messages read for
+    suppressions, so the two always cover the same commits.
+
+    A push that creates a branch reports an all-zero "before": there is no prior
+    tip. A force-push reports the tip it replaced, which no branch or tag points
+    at any more, and actions/checkout fetches only those — so the commit is not
+    in the clone, and diffing from it fails outright. Either way the head commit
+    is the one thing left to check.
+    """
+    if event_name != "push":
+        return None
+    before = payload.get("before") or ""
+    if not before or before == ZERO_SHA:
+        return None
+    present = subprocess.run(
+        ["git", "cat-file", "-e", "%s^{commit}" % before],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if present.returncode:
+        print(
+            "Note: the push replaced %s, which is not in the checkout (a force-push), "
+            "so only the head commit is checked." % before
+        )
+        return None
+    return before
+
+
+def git_log_messages(event_name: str, before: str | None, current_sha: str) -> list[str]:
     """The commit messages this run is allowed to read suppressions from.
 
     The range mirrors the diff below exactly, so only the work being checked can
@@ -182,11 +213,11 @@ def git_log_messages(event_name: str, payload: JsonObject, current_sha: str) -> 
         base = env("GITHUB_BASE_REF")
         return ["git", "log", "--format=%B", "origin/%s..%s" % (base, current_sha)]
     if event_name == "push":
-        before = payload.get("before") or ""
-        if before and before != ZERO_SHA:
+        if before:
             return ["git", "log", "--format=%B", "%s..%s" % (before, current_sha)]
-        # A new branch has no prior tip to enumerate from, so only the head
-        # commit is read — exactly the commit the diff covers.
+        # A new branch, or a force-push whose prior tip is gone, leaves no range
+        # to enumerate, so only the head commit is read — exactly the commit the
+        # diff covers.
         return ["git", "log", "-1", "--format=%B", current_sha]
     # No push range and no pull request, so the commit being scanned is the only
     # one that can be meant. Reading it keeps a workflow_dispatch re-run of a
@@ -194,7 +225,9 @@ def git_log_messages(event_name: str, payload: JsonObject, current_sha: str) -> 
     return ["git", "log", "-1", "--format=%B", "HEAD"]
 
 
-def write_suppression_file(event_name: str, payload: JsonObject, current_sha: str) -> str:
+def write_suppression_file(
+    event_name: str, payload: JsonObject, before: str | None, current_sha: str
+) -> str:
     """Collect the commit messages, and any description, into one file.
 
     blockwatch reads `Blockwatch-suppress: ADDRESS` lines out of any text and
@@ -205,7 +238,7 @@ def write_suppression_file(event_name: str, payload: JsonObject, current_sha: st
     handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
     with handle:
         log = subprocess.run(
-            git_log_messages(event_name, payload, current_sha),
+            git_log_messages(event_name, before, current_sha),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -276,7 +309,34 @@ def blockwatch_args(suppression_file: str) -> list[str]:
     return args
 
 
-def diff_command(event_name: str, payload: JsonObject, current_sha: str) -> list[str] | None:
+def head_commit_diff(current_sha: str) -> list[str]:
+    """The change the head commit made, against its first parent.
+
+    `git diff-tree`, not `git diff`, for the root commit: --root is a diff-tree
+    option that git diff accepts silently and then ignores, comparing the
+    working tree instead — on this action's clean checkout, an empty patch.
+    `--no-commit-id` drops a line blockwatch does not document as part of its
+    input.
+
+    Any other commit is diffed against its first parent by naming it. This was
+    `diff-tree -m --first-parent`, but --first-parent only steers a history walk
+    and diff-tree ignores it: -m printed one patch per parent, concatenated, and
+    blockwatch kept the last one per file — the second parent's. That got a
+    merge at the head of a branch backwards. `--diff-merges=first-parent` would
+    do it as well, but needs git 2.31, and the README promises 2.18; the
+    two-tree form works on every git.
+    """
+    parent = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "%s^1" % current_sha],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if parent.returncode:
+        return ["git", "diff-tree", "--patch", "--root", "--no-commit-id", current_sha]
+    return ["git", "diff-tree", "--patch", parent.stdout.decode().strip(), current_sha]
+
+
+def diff_command(event_name: str, before: str | None, current_sha: str) -> list[str] | None:
     """The diff for this event, or None for an event that has none."""
     pathspec = env("INPUT_DIFF_PATHSPEC").split()
 
@@ -291,33 +351,13 @@ def diff_command(event_name: str, payload: JsonObject, current_sha: str) -> list
             "origin/%s...%s" % (env("GITHUB_BASE_REF"), current_sha),
         ]
     elif event_name == "push":
-        before = payload.get("before") or ""
-        if before and before != ZERO_SHA:
+        if before:
             command = ["git", "diff", "--patch", "%s...%s" % (before, current_sha)]
         else:
-            # A push that creates a branch reports an all-zero "before": there is
-            # no prior tip, so the head commit is diffed against the empty tree.
-            #
-            # `git diff-tree`, not `git diff`: --root is a diff-tree option that
-            # git diff accepts silently and then ignores, comparing the working
-            # tree instead — on this action's clean checkout, an empty patch that
-            # lets every validator pass without examining anything. `-m
-            # --first-parent` is what makes a merge commit emit anything at all,
-            # and a new branch can have a merge at its head. `--no-commit-id`
-            # drops a line blockwatch does not document as part of its input.
-            #
-            # Only the head commit is covered; a new branch has no base for its
-            # earlier commits, which get checked when it is opened as a PR.
-            command = [
-                "git",
-                "diff-tree",
-                "--patch",
-                "--root",
-                "-m",
-                "--first-parent",
-                "--no-commit-id",
-                current_sha,
-            ]
+            # A new branch, or a force-push whose prior tip is not in the clone.
+            # Only the head commit is covered: there is no base for the earlier
+            # commits, which get checked when the branch is opened as a PR.
+            command = head_commit_diff(current_sha)
     else:
         print(
             "Note: event '%s' provides no diff, so the whole repository is scanned. "
@@ -345,25 +385,45 @@ def run_blockwatch(
     out of the log is still there, after the run rather than during it. stdout —
     the verbosity report — is left attached to the log as it happens.
     """
-    if command is None:
-        # Without --diff blockwatch never reads stdin, so there is no descriptor
-        # here to block on.
-        full = ["blockwatch"] + args
-        result = subprocess.run(full, stderr=subprocess.PIPE)
-        return result.returncode, result.stderr.decode("utf-8", "replace")
-
-    flags = ["--diff"] + (["--only-changed"] if only_changed else [])
-    full = ["blockwatch"] + flags + args
     with tempfile.TemporaryFile() as diff:
-        git = subprocess.run(command, stdout=diff, stderr=None)
-        diff.seek(0)
-        result = subprocess.run(full, stdin=diff, stderr=subprocess.PIPE)
+        if command is not None:
+            git = subprocess.run(command, stdout=diff, stderr=None)
+            # Checked before blockwatch runs, not after: a git that dies partway
+            # leaves a shorter but well-formed patch, which would pass as a
+            # clean run over changes nobody read. Its own error is already in
+            # the log, on the stderr it inherited.
+            if git.returncode:
+                raise Failure(
+                    "`%s` failed with exit code %d, so there is no diff to check"
+                    % (" ".join(command), git.returncode)
+                )
+            # git succeeded and printed nothing: nothing in the range changed a
+            # file, or diff_pathspec excluded every change. blockwatch rejects an
+            # empty diff, but there is still a repository to check, and without
+            # changes `affects` has nothing to compare anyway.
+            if not diff.seek(0, os.SEEK_END):
+                print(
+                    "Note: the diff for this event is empty, so the whole repository is "
+                    "scanned without it. Diff-driven checks (e.g. affects) have nothing "
+                    "to compare, and 'only_changed' does not apply."
+                )
+                command = None
 
-    # Mirrors what `set -o pipefail` reported before: blockwatch's own code
-    # whenever it failed — an unreadable diff included, since an empty stdin is
-    # an error it raises itself — and git's only if blockwatch still exited 0.
-    status = result.returncode or git.returncode
-    return status, result.stderr.decode("utf-8", "replace")
+        # The notes above say how the run is about to go, and blockwatch writes
+        # its report to the same stdout; unflushed, they would land after it.
+        sys.stdout.flush()
+        if command is None:
+            # Without --diff blockwatch never reads stdin, so there is no
+            # descriptor here to block on.
+            result = subprocess.run(["blockwatch"] + args, stderr=subprocess.PIPE)
+        else:
+            diff.seek(0)
+            flags = ["--diff"] + (["--only-changed"] if only_changed else [])
+            result = subprocess.run(
+                ["blockwatch"] + flags + args, stdin=diff, stderr=subprocess.PIPE
+            )
+
+    return result.returncode, result.stderr.decode("utf-8", "replace")
 
 
 # --------------------------------------------------------------------------
@@ -590,11 +650,16 @@ def main() -> int:
     event_name = env("GITHUB_EVENT_NAME")
     current_sha = env("GITHUB_SHA")
 
-    suppression_file = write_suppression_file(event_name, payload, current_sha)
+    before = push_base(event_name, payload)
+    suppression_file = write_suppression_file(event_name, payload, before, current_sha)
     args = blockwatch_args(suppression_file)
-    command = diff_command(event_name, payload, current_sha)
+    command = diff_command(event_name, before, current_sha)
 
-    status, diagnostics = run_blockwatch(command, args, only_changed)
+    try:
+        status, diagnostics = run_blockwatch(command, args, only_changed)
+    except Failure as error:
+        print("Error: %s." % error, file=sys.stderr)
+        return 1
     sys.stdout.flush()
     sys.stderr.write(diagnostics)
     sys.stderr.flush()

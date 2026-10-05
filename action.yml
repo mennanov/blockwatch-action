@@ -59,7 +59,7 @@ inputs:
     required: false
     default: 'true'
   diff_pathspec:
-    description: "Additional git diff pathspecs or options to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that"
+    description: "Additional git diff pathspecs to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that. A diff they empty is not an error: the step then checks every block without it"
     required: false
     default: ''
 
