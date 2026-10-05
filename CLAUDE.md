@@ -26,7 +26,7 @@ act push -W .github/workflows/local-test.yml -e /tmp/push.json
 
 The bare `act -W ...` defaults to `push`, so it hits that same empty-diff failure — use one of the forms above.
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `only_changed`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `config`, `only_changed`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
 
 Every case but the last group passes, which cannot exercise the reporting: a clean run
 produces no diagnostics to annotate. The two files in `testdata/` violate `keep-sorted` on
@@ -184,6 +184,7 @@ Every list input accepts comma-separated *or* newline-separated values. `split_l
 | `suppress_from`| `--suppress-from`                       |
 | `verbosity`    | `--verbosity` *(scalar, see below)*     |
 | `format`       | `--format` *(scalar, see below)*        |
+| `config`       | `--config` *(scalar path, see below)*   |
 | `only_changed` | `--only-changed` *(boolean, see below)* |
 | `globs`        | *(positional)*                          |
 
@@ -257,6 +258,18 @@ redirecting it to a file, so `format: sarif` alone gives a caller nothing to han
 `github/codeql-action/upload-sarif`; the README says so under Known limitations. Adding a file output would
 mean redirecting stderr in step 7, which would also hide the JSON diagnostics from the log for everyone else,
 so it hasn't been done.
+
+`config` (blockwatch 0.8.0+) is a path to a config file read instead of `blockwatch.toml`, and the third
+scalar: blockwatch refuses a repeated `--config` outright (exit 2), so it stays out of `split_list`. Unlike
+`verbosity` and `format` it is only trimmed, not passed through `scalar`, which strips *every* whitespace
+character and would break a path containing a space. blockwatch resolves it against the working directory,
+which for the step is the repository root. Nothing is validated here: a missing file fails the step with the
+path named. Without the input, blockwatch reads `blockwatch.toml` at the repository root when there is one —
+that takes no code here. The file's `ignore` and `extensions` add to the inputs' (the input wins for the same
+extension), while `enable`/`disable` *replace* the file's selection, so `disable: line-count` turns back on a
+validator the file disables. That is blockwatch's rule, documented in the input descriptions and the README
+rather than worked around. Blocks the file declares (`[[block]]`, virtual blocks) report their violations
+against the file they wrap, in the same diagnostics format, so the reporting needs nothing for them either.
 
 `globs` are positional, so they are appended last and nothing may follow them in the argument list. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
 

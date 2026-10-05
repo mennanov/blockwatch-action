@@ -263,6 +263,12 @@ def blockwatch_args(suppression_file: str) -> list[str]:
     output_format = scalar(env("INPUT_FORMAT"))
     if output_format:
         args += ["--format", output_format]
+    # A single path too, and blockwatch refuses a repeated --config outright.
+    # Only trimmed: `scalar` strips every space, including one inside a path. A
+    # missing file is left to blockwatch, which names it.
+    config = env("INPUT_CONFIG").strip()
+    if config:
+        args += ["--config", config]
 
     # Globs are positional, so they come last and nothing may follow them. Since
     # blockwatch 0.4.0 they only ever narrow a run.

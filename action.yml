@@ -3,19 +3,23 @@ description: 'Runs the blockwatch linter to analyze dependent blocks of code'
 
 inputs:
   extensions:
-    description: 'Extensions to pass to blockwatch in the format "key1=value1,key2=value2"'
+    description: 'Extensions to pass to blockwatch in the format "key1=value1,key2=value2". Added to the "extensions" of blockwatch.toml; this input wins for the same extension'
     required: false
     default: ''
   enable:
-    description: 'Validators to enable (comma separated)'
+    description: 'Validators to enable (comma separated). Replaces the "enable" or "disable" selection of blockwatch.toml'
     required: false
     default: ''
   disable:
-    description: 'Validators to disable (comma separated)'
+    description: 'Validators to disable (comma separated). Replaces the "enable" or "disable" selection of blockwatch.toml, so a validator the file disables runs again unless it is listed here too'
     required: false
     default: ''
   ignore:
-    description: 'Glob patterns for files to ignore (comma separated)'
+    description: 'Glob patterns for files to ignore (comma separated). Added to the "ignore" of blockwatch.toml'
+    required: false
+    default: ''
+  config:
+    description: 'A config file to read instead of "blockwatch.toml" at the repository root, e.g. "ci/blockwatch.toml". Relative to the repository root, and the file must exist. Without it, blockwatch.toml is read when there is one'
     required: false
     default: ''
   suppress:
@@ -43,7 +47,7 @@ inputs:
     required: false
     default: 'false'
   annotations:
-    description: 'Report each violation as a GitHub annotation ("true", the default), so it appears on the line itself in the pull request and in the check run of the job, on top of the job log. Needs "jq" on the runner'
+    description: 'Report each violation as a GitHub annotation ("true", the default), so it appears on the line itself in the pull request and in the check run of the job, on top of the job log'
     required: false
     default: 'true'
   annotations_limit:
@@ -104,7 +108,7 @@ runs:
       # command read this output instead of repeating the literal, so upgrading
       # blockwatch is a one-line edit that cannot leave the two disagreeing —
       # a stale key would serve the old binary under the new version's name.
-      run: echo "version=0.7.0" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.8.0" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
@@ -175,6 +179,7 @@ runs:
         INPUT_ENABLE: ${{ inputs.enable }}
         INPUT_DISABLE: ${{ inputs.disable }}
         INPUT_IGNORE: ${{ inputs.ignore }}
+        INPUT_CONFIG: ${{ inputs.config }}
         INPUT_SUPPRESS: ${{ inputs.suppress }}
         INPUT_SUPPRESS_FROM: ${{ inputs.suppress_from }}
         INPUT_GLOBS: ${{ inputs.globs }}

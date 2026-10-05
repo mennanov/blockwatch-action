@@ -96,6 +96,19 @@ jobs:
           verbosity: "summary"
           globs: "**/*.md,**/*.yml"
 
+      # Written outside the checkout: a blockwatch.toml at the repository root
+      # would be read by every other case as well.
+      - name: Write a config file
+        run: |
+          printf "ignore = ['target/**']\ndisable = ['check-ai']\n" > "$RUNNER_TEMP/blockwatch.toml"
+
+      - name: Run Blockwatch Action (Config)
+        uses: ./
+        with:
+          config: "${{ runner.temp }}/blockwatch.toml"
+          verbosity: "summary"
+          globs: "**/*.md"
+
       - name: Run Blockwatch Action (Only Changed)
         uses: ./
         with:

@@ -23,6 +23,7 @@ By default, this checks every block in the repository and uses the git diff to i
 | `only_changed` | `"false"` | Check only blocks modified in the diff. See [Diff checking and scope](#diff-checking-and-scope) |
 | `globs` | | File patterns to check (e.g. `"**/*.md,**/*.yml"`) |
 | `ignore` | | File patterns to skip (e.g. `"target/**,dist/**"`) |
+| `config` | | Config file to read instead of `blockwatch.toml`. See [Config file](#config-file) |
 | `suppress` | | Violations to report without failing the run (e.g. `"docs/cli.md:cli-docs:keep-sorted"`) |
 | `suppress_from` | | Files containing suppression addresses. See [Suppressing violations](#suppressing-violations) |
 | `enable` | | Comma-separated validators to run (e.g. `"keep-sorted,keep-unique"`) |
@@ -53,6 +54,22 @@ On `push` and `pull_request` events, the action generates a git diff and feeds i
 `globs` and `ignore` filter which files are scanned. `diff_pathspec` only filters the diff itself. Hidden directories (like `.github/`) are scanned; only VCS directories (`.git`, `.hg`, `.jj`, `.svn`) and paths ignored by `.gitignore` or `ignore` are skipped.
 
 Events without a diff (e.g. `workflow_dispatch`, `schedule`) scan the full repository, and `only_changed` is ignored.
+
+## Config file
+
+blockwatch reads the settings a project always uses from `blockwatch.toml` at the repository root, so the action, a pre-commit hook and local runs share one copy. The action picks it up with no input. Set `config` to read another file instead, relative to the repository root. See the [blockwatch documentation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#config-file) for the keys.
+
+The inputs combine with the file the way blockwatch's flags do:
+
+| Input | With the file's key |
+|---|---|
+| `ignore` | Both lists apply |
+| `extensions` | Both apply; the input wins for the same extension |
+| `enable`, `disable` | The input replaces the file's selection |
+
+So `disable: "line-count"` turns a validator the file disables back on. List it in the input too to keep it off.
+
+The file can also declare blocks around values in files that cannot hold a comment, such as a version in `package.json`. Their violations are reported, and annotated, on that file.
 
 ## Suppressing violations
 
