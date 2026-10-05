@@ -152,6 +152,13 @@ runs:
         # names the real one: no binary is published for this platform.
         cargo-binstall --no-confirm --disable-strategies compile "blockwatch@${{ steps.blockwatch-version.outputs.version }}"
       shell: bash
+      env:
+        # binstall finds the release through api.github.com. Anonymously that is
+        # 60 requests an hour per IP.  The job token
+        # is rate-limited per repository instead. Any token will do, read-only
+        # from a fork included; one api.github.com rejects (a GHES token) is
+        # dropped by binstall, which then continues anonymously as before.
+        GITHUB_TOKEN: ${{ github.token }}
 
     - name: Run blockwatch on diff
       id: diff
