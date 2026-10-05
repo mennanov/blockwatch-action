@@ -373,6 +373,25 @@ now.
 
 ## Releasing
 
-Consumers reference `mennanov/blockwatch-action@v1`. Cut a new patch tag (`v1.0.N`) **and** force-move the `v1` tag to the same commit — `v1` currently tracks the latest release, and a release that only creates the patch tag reaches nobody.
+Consumers reference `mennanov/blockwatch-action@v1`. A release is two tags on one commit: a new
+version tag **and** the `v1` tag force-moved to it. `v1` tracks the latest release, so a release that
+only creates the version tag reaches nobody.
+
+**Take the next version from the tags, never from memory or from this file.** The latest release is:
+
+```shell
+git fetch --tags
+git tag --list 'v*.*.*' --sort=-v:refname | head -1
+```
+
+The next patch release is that tag with its last number incremented. A new minor or major series is
+a deliberate decision, never the default. The version sort is load-bearing: a plain `git tag` sorts
+as text and lists `v1.1.9` after `v1.1.10`. Neither does `git describe` help here, since the commits
+below carry two tags each.
+
+`v1.0.11` through `v1.0.17` were cut by mistake after `v1.1.4`. They are kept because consumers may
+pin them, and each shares its commit with the correct tag, `v1.1.5` through `v1.1.11`. The version
+sort ranks them below every `v1.1.x`, so the command above never picks them up. Never continue that
+series.
 
 Dependabot bumps the pinned third-party actions (`actions/checkout`, `actions/cache`, `cargo-bins/cargo-binstall`) monthly as one grouped PR.
