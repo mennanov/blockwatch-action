@@ -203,7 +203,7 @@ address is rejected with the offending segment named (exit 2, failing the step),
 matches no violation is silently ignored, so a suppression left behind after its violation is fixed does not
 fail the run.
 
-`suppress_from` (blockwatch 0.5.4+) is a list of *paths* to files carrying `Blockwatch-suppress: ADDRESS`
+`suppress_from` (blockwatch 0.5.4+) is a list of *paths* to files carrying `blockwatch-suppress: ADDRESS`
 lines — the same addresses, read from a file rather than written into the workflow. Every other line in the
 file is ignored. It accumulates with `suppress`; neither overrides the other. Nothing is validated here
 either: an unreadable path fails the step with the path named (exit 1), which is the right outcome — an
@@ -241,7 +241,7 @@ ignores every line that isn't an address. Three details are load-bearing:
   mislabels a line, it does not suppress one.
 
 Two consequences worth keeping in mind, both in the README under Known limitations: anyone who can open a
-pull request can suppress a violation inside it, and a line that *starts* with `Blockwatch-suppress:` but
+pull request can suppress a violation inside it, and a line that *starts* with `blockwatch-suppress:` but
 carries a malformed address (too many `:` segments, or a trailing one) fails the step rather than being
 skipped. A mid-sentence mention or a `>`-quoted line is not matched, so ordinary prose is safe.
 

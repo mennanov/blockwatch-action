@@ -56,7 +56,7 @@ class Annotation:
     @property
     def address(self) -> str:
         """The suppression address the annotation offers, if it carries one."""
-        _, _, address = self.message.partition("Suppress with: Blockwatch-suppress: ")
+        _, _, address = self.message.partition("Suppress with: blockwatch-suppress: ")
         return address
 
     def __repr__(self) -> str:
@@ -235,7 +235,7 @@ class RunTest(ActionTestCase):
         self.assertEqual(result.levels, ["error"])
 
     def test_commit_message_can_suppress_a_violation_it_introduces(self) -> None:
-        self.break_fruit("break the order\n\nBlockwatch-suppress: docs/a.md\n")
+        self.break_fruit("break the order\n\nblockwatch-suppress: docs/a.md\n")
 
         result = self.run_action()
 
@@ -301,7 +301,7 @@ class RunTest(ActionTestCase):
         self.assertEqual(result.levels, ["error"])
 
     def test_force_push_checks_the_head_commit_and_reads_its_message(self) -> None:
-        self.break_fruit("break the order\n\nBlockwatch-suppress: docs/a.md\n")
+        self.break_fruit("break the order\n\nblockwatch-suppress: docs/a.md\n")
 
         # The tip a force-push replaced is on no branch, so the checkout never
         # fetched it: here, a commit the repository does not have.

@@ -101,9 +101,9 @@ suppress: |
 ### 2. Commit messages or PR descriptions
 Add a line to a commit message or PR description:
 ```text
-Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
+blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
 ```
-The action inspects commits in the push or PR (and the PR body) for lines starting with `Blockwatch-suppress:`. Any detected suppressions are printed in the job log.
+The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected suppressions are printed in the job log.
 
 The description is read from the API when the run starts, not from the event that triggered it. The two differ after an edit: a re-run replays the original event, so a description-based suppression would otherwise not take effect until the next push. Reading it live means **edit the description, press Re-run, and the violation stops blocking**. The job log names which source was used; without a usable `GITHUB_TOKEN` the action falls back to the event payload.
 
@@ -113,7 +113,7 @@ The description is read from the API when the run starts, not from the event tha
   with:
     suppress_from: "ci/known-violations.txt"
 ```
-Files use the same format: lines starting with `Blockwatch-suppress: ADDRESS` are parsed, and all other lines are ignored.
+Files use the same format: lines starting with `blockwatch-suppress: ADDRESS` are parsed, and all other lines are ignored.
 
 ## Verbosity and reports
 
@@ -132,7 +132,7 @@ on the line it refers to in the pull request, and in the check run for the job:
 
 ```text
 ::error file=docs/cli.md,line=12,endLine=12,col=1,endColumn=40,title=blockwatch: keep-sorted::Block docs/cli.md:cli-docs defined at line 9 has an out-of-order line 12 (asc)
-Suppress with: Blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
+Suppress with: blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
 ```
 
 - A violation that fails the run is an **error**; a [suppressed](#suppressing-violations)
@@ -161,8 +161,8 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 
 - **Empty diffs scan without the diff**: When the changes cancel out, the commits are empty, or `diff_pathspec` excludes every changed file, the repository is checked as on an event with no diff, so `affects` has nothing to compare and `only_changed` does not apply.
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
-- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `Blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
-- **Malformed suppression syntax**: A line starting with `Blockwatch-suppress:` with invalid address syntax will fail the step.
+- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
+- **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax will fail the step.
 - **Initial push on new branch, and force-pushes**: GitHub provides no previous base commit for a newly pushed branch, and the one a force-push replaced is no longer fetched, so only the head commit is diffed against its first parent, and only its message is read for suppressions. Earlier commits in that push are checked once a PR is opened.
 - **Annotations appear inline only on changed lines**: GitHub renders an annotation in
   the *Files changed* tab only where the pull request touches that line. In the default

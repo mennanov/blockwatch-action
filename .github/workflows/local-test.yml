@@ -20,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Blockwatch Action
+      - name: Run blockwatch Action
         uses: ./
         with:
           # Test various inputs to ensure argument parsing works correctly
@@ -29,10 +29,10 @@ jobs:
           ignore: "target/**"
           globs: "**/*.md"
           
-      - name: Run Blockwatch Action (No Args)
+      - name: Run blockwatch Action (No Args)
         uses: ./
 
-      - name: Run Blockwatch Action (Enable Args)
+      - name: Run blockwatch Action (Enable Args)
         uses: ./
         with:
           extensions: |
@@ -42,7 +42,7 @@ jobs:
           ignore: "target/**,dist/**"
           globs: "**/*.md,**/*.yml"
 
-      - name: Run Blockwatch Action (Disable Args)
+      - name: Run blockwatch Action (Disable Args)
         uses: ./
         with:
           disable: |
@@ -50,25 +50,25 @@ jobs:
             line-count
           globs: "**/*.md"
 
-      - name: Run Blockwatch Action (Verbosity Summary)
+      - name: Run blockwatch Action (Verbosity Summary)
         uses: ./
         with:
           verbosity: "summary"
           globs: "**/*.md"
 
-      - name: Run Blockwatch Action (Verbosity Full)
+      - name: Run blockwatch Action (Verbosity Full)
         uses: ./
         with:
           verbosity: "full"
           globs: "**/*.md"
 
-      - name: Run Blockwatch Action (SARIF Format)
+      - name: Run blockwatch Action (SARIF Format)
         uses: ./
         with:
           format: "sarif"
           globs: "**/*.md"
 
-      - name: Run Blockwatch Action (Suppress)
+      - name: Run blockwatch Action (Suppress)
         uses: ./
         with:
           suppress: |
@@ -79,16 +79,16 @@ jobs:
 
       - name: Write a suppression file
         run: |
-          printf 'A commit subject\n\nBlockwatch-suppress: README.md\n' > "$RUNNER_TEMP/commit_msg.txt"
+          printf 'A commit subject\n\nblockwatch-suppress: README.md\n' > "$RUNNER_TEMP/commit_msg.txt"
 
-      - name: Run Blockwatch Action (Suppress From)
+      - name: Run blockwatch Action (Suppress From)
         uses: ./
         with:
           suppress_from: "${{ runner.temp }}/commit_msg.txt"
           verbosity: "summary"
           globs: "**/*.md"
 
-      - name: Run Blockwatch Action (Suppress And Suppress From)
+      - name: Run blockwatch Action (Suppress And Suppress From)
         uses: ./
         with:
           suppress: "action.yml"
@@ -102,14 +102,14 @@ jobs:
         run: |
           printf "ignore = ['target/**']\ndisable = ['check-ai']\n" > "$RUNNER_TEMP/blockwatch.toml"
 
-      - name: Run Blockwatch Action (Config)
+      - name: Run blockwatch Action (Config)
         uses: ./
         with:
           config: "${{ runner.temp }}/blockwatch.toml"
           verbosity: "summary"
           globs: "**/*.md"
 
-      - name: Run Blockwatch Action (Only Changed)
+      - name: Run blockwatch Action (Only Changed)
         uses: ./
         with:
           only_changed: "true"
@@ -127,7 +127,7 @@ jobs:
       # they put an error and a notice on a single line, which reads as the same
       # violation reported twice. The rest exercise their own input while
       # emitting no file annotation at all.
-      - name: Run Blockwatch Action (Annotations)
+      - name: Run blockwatch Action (Annotations)
         continue-on-error: true
         uses: ./
         with:
@@ -135,7 +135,7 @@ jobs:
           globs: "testdata/annotations-fixture.bwfixture"
           verbosity: "none"
 
-      - name: Run Blockwatch Action (Annotations Off)
+      - name: Run blockwatch Action (Annotations Off)
         continue-on-error: true
         uses: ./
         with:
@@ -148,7 +148,7 @@ jobs:
       # omitted, so the step emits the "further violation(s)" notice and not a
       # single file annotation. A limit of 1 against a one-violation fixture
       # would emit the card and never reach the branch being tested.
-      - name: Run Blockwatch Action (Annotations Limit)
+      - name: Run blockwatch Action (Annotations Limit)
         continue-on-error: true
         uses: ./
         with:
@@ -158,7 +158,7 @@ jobs:
 
       # The SARIF filter still runs and its output still has to be well formed,
       # but it lands in the job summary rather than as a third identical card.
-      - name: Run Blockwatch Action (Annotations From SARIF)
+      - name: Run blockwatch Action (Annotations From SARIF)
         continue-on-error: true
         uses: ./
         with:
@@ -170,7 +170,7 @@ jobs:
 
       # A suppressed violation is still reported, so it still gets an annotation
       # - as a notice rather than an error, since it does not fail the run.
-      - name: Run Blockwatch Action (Annotations For A Suppressed Violation)
+      - name: Run blockwatch Action (Annotations For A Suppressed Violation)
         uses: ./
         with:
           extensions: "bwfixture=md"

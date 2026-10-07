@@ -230,7 +230,7 @@ def write_suppression_file(
 ) -> str:
     """Collect the commit messages, and any description, into one file.
 
-    blockwatch reads `Blockwatch-suppress: ADDRESS` lines out of any text and
+    blockwatch reads `blockwatch-suppress: ADDRESS` lines out of any text and
     ignores every other line, so no extraction is needed — a commit message is
     valid input as it stands. This is additive: the `suppress` and
     `suppress_from` inputs still apply.
@@ -596,7 +596,7 @@ def emit_annotations(violations: list[Violation], limit: int) -> None:
         if violation.address:
             # Concatenated, not %-formatted: the literal "%0A" is a newline for
             # the runner and a format specifier for Python.
-            message += "%0ASuppress with: Blockwatch-suppress: " + violation.address
+            message += "%0ASuppress with: blockwatch-suppress: " + violation.address
         print("::%s %s::%s" % (violation.level, ",".join(properties), message))
         emitted += 1
 

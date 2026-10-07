@@ -27,7 +27,7 @@ inputs:
     required: false
     default: ''
   suppress_from:
-    description: 'Extra files to read suppression addresses from (comma separated), e.g. "notes.txt". Every "Blockwatch-suppress: ADDRESS" line in the file suppresses that violation; all other lines are ignored. Read in addition to the commit messages under test, and a pull request description, which are always read'
+    description: 'Extra files to read suppression addresses from (comma separated), e.g. "notes.txt". Every "blockwatch-suppress: ADDRESS" line in the file suppresses that violation; all other lines are ignored. Read in addition to the commit messages under test, and a pull request description, which are always read'
     required: false
     default: ''
   globs:
