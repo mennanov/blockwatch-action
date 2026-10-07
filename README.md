@@ -21,7 +21,7 @@ By default, this checks every block in the repository and uses the git diff to i
 | Input | Default | Description |
 |---|---|---|
 | `only_changed` | `"false"` | Check only blocks modified in the diff. See [Diff checking and scope](#diff-checking-and-scope) |
-| `globs` | | File patterns to check (e.g. `"**/*.md,**/*.yml"`) |
+| `globs` | | Files, directories or patterns to check (e.g. `"src,**/*.md"`) |
 | `ignore` | | File patterns to skip (e.g. `"target/**,dist/**"`) |
 | `config` | | Config file to read instead of `blockwatch.toml`. See [Config file](#config-file) |
 | `suppress` | | Violations to report without failing the run (e.g. `"docs/cli.md:cli-docs:keep-sorted"`) |
@@ -51,7 +51,7 @@ On `push` and `pull_request` events, the action generates a git diff and feeds i
 - **Default (`only_changed: "false"`)**: Scans all blocks across the repository, using the diff to flag modified blocks. This allows cross-block validators like `affects` to verify that related blocks stay in sync.
 - **`only_changed: "true"`**: Scans only the blocks touched by the diff.
 
-`globs` and `ignore` filter which files are scanned. `diff_pathspec` only filters the diff itself. Hidden directories (like `.github/`) are scanned; only VCS directories (`.git`, `.hg`, `.jj`, `.svn`) and paths ignored by `.gitignore` or `ignore` are skipped.
+`globs` and `ignore` filter which files are scanned. Each entry in `globs` has to select at least one file to check, or the step fails; with `only_changed: "true"` the file need not be one the diff touches. `diff_pathspec` only filters the diff itself. Hidden directories (like `.github/`) are scanned; only VCS directories (`.git`, `.hg`, `.jj`, `.svn`) and paths ignored by `.gitignore` or `ignore` are skipped.
 
 Events without a diff (e.g. `workflow_dispatch`, `schedule`) scan the full repository, and `only_changed` is ignored.
 
@@ -61,7 +61,7 @@ Which diff is used:
 - **Push**: everything since the branch's previous tip.
 - **Push that creates a branch, or force-push**: only the head commit, against its first parent. A force-push replaces the previous tip, which then exists on no branch and is not fetched.
 
-A diff that comes out empty (empty commits, changes that cancel out, or a `diff_pathspec` that excludes everything) is not an error: the repository is scanned without it, as on an event with no diff. A diff git fails to produce fails the step with git's own error.
+A diff that comes out empty (empty commits, changes that cancel out, or a `diff_pathspec` that excludes everything) is not an error: it means no block changed. Every block is still checked, or none with `only_changed: "true"`. A diff git fails to produce fails the step with git's own error.
 
 ## Config file
 
@@ -159,7 +159,6 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 
 ## Known limitations
 
-- **Empty diffs scan without the diff**: When the changes cancel out, the commits are empty, or `diff_pathspec` excludes every changed file, the repository is checked as on an event with no diff, so `affects` has nothing to compare and `only_changed` does not apply.
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
 - **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
 - **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax will fail the step.

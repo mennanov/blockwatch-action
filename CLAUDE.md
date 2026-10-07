@@ -14,7 +14,7 @@ act workflow_dispatch -W .github/workflows/local-test.yml
 # pull_request also needs a payload: act synthesizes one with no base ref, so
 # the diff resolves `origin/...<sha>`, git dies on "ambiguous argument", and
 # every step fails with it. Name a base that is actually behind the head, or the
-# diff comes out empty and every step scans without it instead.
+# diff comes out empty and no step has a change to check.
 printf '{"pull_request": {"base": {"ref": "BASE_BRANCH"}, "head": {"ref": "main"}}}' > /tmp/pr.json
 act pull_request -W .github/workflows/local-test.yml -e /tmp/pr.json
 
@@ -273,7 +273,7 @@ validator the file disables. That is blockwatch's rule, documented in the input 
 rather than worked around. Blocks the file declares (`[[block]]`, virtual blocks) report their violations
 against the file they wrap, in the same diagnostics format, so the reporting needs nothing for them either.
 
-`globs` are positional, so they are appended last and nothing may follow them in the argument list. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived.
+`globs` are positional, so they are appended last and nothing may follow them in the argument list. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived. Since 0.9.0 an entry may also be a plain file or directory path, and one that selects no file to check fails the run (with `only_changed`, any file in the repository counts, not only a changed one). Nothing here validates that either, and every `globs` in `local-test.yml` has to select a file the case can check.
 
 ### Reporting
 
@@ -338,12 +338,11 @@ The default (`only_changed: false`) validates **every block in the repository** 
 
 `only_changed: true` makes the diff the scope again, exactly as before 0.4.0, and both of those revert with it.
 
-**An empty diff falls back to a run without it.** blockwatch rejects one (`diff in stdin is empty.`), so `run_blockwatch` writes the diff to a file first and checks two things, which must stay distinct:
+**The diff is written to a file before blockwatch reads it**, so that `run_blockwatch` can check git's exit code first. A failure — a revision the clone lacks, or a git that dies partway and leaves a shorter but well-formed patch — fails the step with git's error, and blockwatch never runs. Scanning anyway here would be the failure mode 0.4.0 exists to remove: a linter that silently passes on an input it could not read.
 
-- **git's exit code.** A failure — a revision the clone lacks, or a git that dies partway and leaves a shorter but well-formed patch — fails the step with git's error, and blockwatch never runs. Scanning anyway here would be the failure mode 0.4.0 exists to remove: a linter that silently passes on an input it could not read.
-- **Then the size.** A diff git produced successfully and left empty means nothing in the range changed a file: empty commits (a CI retrigger), changes that cancel out, a pull request already applied to its base, a reset to a tip another branch still holds, or `diff_pathspec` excluding everything. blockwatch then runs bare, as on an event with no diff, and the log says so. Without changes `affects` has nothing to compare anyway; `only_changed` checks every block instead of none, which errs strict.
+**An empty diff is passed on like any other.** A diff git produced successfully and left empty means nothing in the range changed a file: empty commits (a CI retrigger), changes that cancel out, a pull request already applied to its base, a reset to a tip another branch still holds, or `diff_pathspec` excluding everything. Since 0.9.0 blockwatch reads it as exactly that: the default mode checks every block, with nothing marked as changed, and `only_changed` checks none. The log says the diff was empty, which is the only thing the size check still does.
 
-This used to fail the step outright. A guard was rejected then because the shell pipe could not tell an empty diff from an unreadable one; checking git's code separately is what makes the distinction, and blockwatch's own pre-commit hooks made the same change in 0.8.0. The size check is the file's length, not blockwatch's `trim().is_empty()`: git never prints whitespace alone, and if it did, blockwatch would reject it loudly rather than pass it.
+Before 0.9.0 blockwatch rejected an empty diff (`diff in stdin is empty.`), so the step ran a bare `blockwatch` in its place, and `only_changed` checked every block instead of none. blockwatch's own pre-commit hooks carried the same fallback and dropped it in the same release. Don't bring it back: under `only_changed` it ran the full scan the caller opted out of.
 
 ### Diff selection per event
 

@@ -221,7 +221,7 @@ class RunTest(ActionTestCase):
         # Falling back to a scan here would hide that the diff was never read.
         self.assertEqual(result.annotations, [])
 
-    def test_empty_diff_still_checks_every_block(self) -> None:
+    def test_empty_diff_counts_as_no_change(self) -> None:
         self.break_fruit()
         before = self.git("rev-parse", "HEAD")
         self.git("commit", "-q", "--allow-empty", "-m", "retrigger CI")
@@ -233,6 +233,12 @@ class RunTest(ActionTestCase):
         self.assertIn("diff for this event is empty", result.stdout)
         self.assertEqual(result.exit_code, 1)
         self.assertEqual(result.levels, ["error"])
+
+        # The empty diff still reaches blockwatch, so only_changed checks no
+        # block. A run without --diff in its place would check every block.
+        only_changed = self.run_action(event={"before": before}, INPUT_ONLY_CHANGED="true")
+        self.assertEqual(only_changed.exit_code, 0)
+        self.assertEqual(only_changed.annotations, [])
 
     def test_commit_message_can_suppress_a_violation_it_introduces(self) -> None:
         self.break_fruit("break the order\n\nblockwatch-suppress: docs/a.md\n")
@@ -295,8 +301,8 @@ class RunTest(ActionTestCase):
         result = self.run_action(event={"before": "0" * 40})
 
         # `git diff --root` would silently compare the working tree and hand
-        # blockwatch an empty patch; diff-tree is what makes this reach a check
-        # through the diff rather than through the empty-diff scan.
+        # blockwatch an empty patch, which still finds the violation but marks
+        # nothing as changed; diff-tree is what makes the diff carry the commit.
         self.assertNotIn("diff for this event is empty", result.stdout)
         self.assertEqual(result.levels, ["error"])
 

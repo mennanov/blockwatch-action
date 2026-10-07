@@ -31,7 +31,7 @@ inputs:
     required: false
     default: ''
   globs:
-    description: 'Glob patterns for files to check (comma separated). They narrow the run: only matching files are checked.'
+    description: 'Files, directories or glob patterns to check (comma separated), from the repository root. They narrow the run: only the files they select are checked. One that selects no file to check fails the run'
     required: false
     default: ''
   verbosity:
@@ -59,7 +59,7 @@ inputs:
     required: false
     default: 'true'
   diff_pathspec:
-    description: "Additional git diff pathspecs to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that. A diff they empty is not an error: the step then checks every block without it"
+    description: "Additional git diff pathspecs to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that. A diff they empty is not an error: no block counts as changed, so every block is still checked, or none with only_changed"
     required: false
     default: ''
 
@@ -108,7 +108,7 @@ runs:
       # command read this output instead of repeating the literal, so upgrading
       # blockwatch is a one-line edit that cannot leave the two disagreeing —
       # a stale key would serve the old binary under the new version's name.
-      run: echo "version=0.8.1" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.9.0" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary

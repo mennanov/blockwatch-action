@@ -304,7 +304,8 @@ def blockwatch_args(suppression_file: str) -> list[str]:
         args += ["--config", config]
 
     # Globs are positional, so they come last and nothing may follow them. Since
-    # blockwatch 0.4.0 they only ever narrow a run.
+    # blockwatch 0.4.0 they only ever narrow a run, and since 0.9.0 one that
+    # selects no file fails it.
     args += split_list(env("INPUT_GLOBS"))
     return args
 
@@ -398,16 +399,20 @@ def run_blockwatch(
                     % (" ".join(command), git.returncode)
                 )
             # git succeeded and printed nothing: nothing in the range changed a
-            # file, or diff_pathspec excluded every change. blockwatch rejects an
-            # empty diff, but there is still a repository to check, and without
-            # changes `affects` has nothing to compare anyway.
+            # file, or diff_pathspec excluded every change. Since 0.9.0 blockwatch
+            # reads an empty diff as exactly that, so it goes in like any other.
+            # Before, blockwatch rejected one and this ran without --diff, which
+            # made only_changed check every block instead of none.
             if not diff.seek(0, os.SEEK_END):
                 print(
-                    "Note: the diff for this event is empty, so the whole repository is "
-                    "scanned without it. Diff-driven checks (e.g. affects) have nothing "
-                    "to compare, and 'only_changed' does not apply."
+                    "Note: the diff for this event is empty, so no block counts as changed. %s"
+                    % (
+                        "With 'only_changed', no block is checked."
+                        if only_changed
+                        else "Every block is still checked, but diff-driven checks "
+                        "(e.g. affects) have nothing to compare."
+                    )
                 )
-                command = None
 
         # The notes above say how the run is about to go, and blockwatch writes
         # its report to the same stdout; unflushed, they would land after it.
@@ -538,7 +543,7 @@ def parse_diagnostics(text: str, output_format: str) -> list[Violation]:
     """Read the captured diagnostics, or give up quietly.
 
     Output that is not a parseable document is left alone: a usage error
-    ("diff in stdin is empty.", a malformed suppression address) arrives on the
+    (a glob that selects no file, a malformed suppression address) arrives on the
     same stream, is already in the log verbatim, and names no line to point at.
 
     Which parser to use is decided by the input rather than by inspecting the
