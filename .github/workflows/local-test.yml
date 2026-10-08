@@ -115,6 +115,31 @@ jobs:
           only_changed: "true"
           verbosity: "summary"
 
+      # The fixtures of the annotation cases below hold the only named blocks in
+      # the repository, so these two borrow them. Each passes only because its
+      # input reached blockwatch: without it, a fixture's keep-sorted violation
+      # fails the step. So neither needs continue-on-error, and neither annotates.
+      - name: Run blockwatch Action (Skip Blocks)
+        uses: ./
+        with:
+          extensions: "bwfixture=md"
+          skip_blocks: |
+            testdata/annotations-fixture.bwfixture:out-of-order
+            testdata/suppressed-fixture.bwfixture:unsorted
+          verbosity: "summary"
+          globs: "testdata/*.bwfixture"
+
+      # The listed block is outside `globs`, which is not an error: the address
+      # still matches a block on disk, and the fixture the run does see is left
+      # with no block to check.
+      - name: Run blockwatch Action (Only Blocks)
+        uses: ./
+        with:
+          extensions: "bwfixture=md"
+          only_blocks: "testdata/annotations-fixture.bwfixture:out-of-order"
+          verbosity: "summary"
+          globs: "testdata/suppressed-fixture.bwfixture"
+
       # Every case above passes, which is the wrong shape for checking how a
       # violation is reported: a clean run has no diagnostics to annotate. These
       # point the action at a file that violates on purpose. `continue-on-error`

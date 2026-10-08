@@ -28,6 +28,8 @@ By default, this checks every block in the repository and uses the git diff to i
 | `suppress_from` | | Files containing suppression addresses. See [Suppressing violations](#suppressing-violations) |
 | `enable` | | Comma-separated validators to run (e.g. `"keep-sorted,keep-unique"`) |
 | `disable` | | Comma-separated validators to skip (cannot be used with `enable`) |
+| `only_blocks` | | Named blocks to check, and no others, as `FILE:BLOCK_NAME` (e.g. `"docs/cli.md:cli-docs"`). See [Selecting blocks](#selecting-blocks) |
+| `skip_blocks` | | Named blocks to leave unchecked (cannot be used with `only_blocks`) |
 | `extensions` | | File extension mappings, e.g. `"cxx=cpp"` |
 | `verbosity` | `"summary"` | Output verbosity: `"none"`, `"summary"` (counts), or `"full"` (JSON) |
 | `format` | `"json"` | Output format: `"json"` or `"sarif"` (SARIF 2.1.0) |
@@ -74,10 +76,41 @@ The inputs combine with the file the way blockwatch's flags do:
 | `ignore` | Both lists apply |
 | `extensions` | Both apply; the input wins for the same extension |
 | `enable`, `disable` | The input replaces the file's selection |
+| `only_blocks`, `skip_blocks` | The input replaces the file's `only-blocks` or `skip-blocks` |
 
 So `disable: "line-count"` turns a validator the file disables back on. List it in the input too to keep it off.
 
 The file can also declare blocks around values in files that cannot hold a comment, such as a version in `package.json`. Their violations are reported, and annotated, on that file.
+
+## Selecting blocks
+
+`only_blocks` checks only the blocks it lists, and `skip_blocks` every block but those. Each entry is the address of one named block, `FILE:BLOCK_NAME`: the start of the suppression address an [annotation](#annotations) shows. An unnamed block has no address, so to leave out a whole file use `globs` or `ignore`.
+
+- An address that matches no block fails the step, so a renamed block can't quietly turn its checks on or off. A block that `globs`, `ignore` or `only_changed` leaves out of the run still counts as a match.
+- A skipped block still exists: `affects` and `same-as` in other blocks can still refer to it.
+- `only_blocks` and `skip_blocks` can't be combined. Either one replaces the `only-blocks` or `skip-blocks` list of [`blockwatch.toml`](#config-file).
+
+So a block that needs the network can be skipped for every run in `blockwatch.toml`:
+
+```toml
+skip-blocks = ['src/models.rs:latest-model']
+```
+
+and checked on its own by a scheduled workflow:
+
+```yaml
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  blockwatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mennanov/blockwatch-action@v1
+        with:
+          only_blocks: "src/models.rs:latest-model"
+```
 
 ## Suppressing violations
 

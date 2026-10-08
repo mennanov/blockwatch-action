@@ -27,7 +27,7 @@ act push -W .github/workflows/local-test.yml -e /tmp/push.json
 
 The bare `act -W ...` defaults to `push`, so it takes that same head-commit path.
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `config`, `only_changed`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `config`, `only_changed`, `skip_blocks`, `only_blocks`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
 
 Every case but the last group passes, which cannot exercise the reporting: a clean run
 produces no diagnostics to annotate. The two files in `testdata/` violate `keep-sorted` on
@@ -36,6 +36,12 @@ walks past them — only the annotation cases make them visible, by passing
 `extensions: "bwfixture=md"`. Those cases are `continue-on-error: true` because the step
 is *meant* to fail; a `git`-tracked file that failed every run would make the workflow
 useless as a smoke test. Don't "fix" those fixtures.
+
+The `skip_blocks` and `only_blocks` cases borrow the same fixtures, which hold the repository's only
+named blocks, and the same mapping. They are the other way round: each passes only because its
+input selected the violating blocks out, so dropping the input fails the step, and neither is
+`continue-on-error` or annotates anything. `only_blocks` names a block in the fixture its `globs`
+leave out, which blockwatch accepts as long as the block exists.
 
 **Each case that annotates has a fixture to itself**, and that is the whole reason there are two.
 Pointed at the same file, the plain case and the suppressed one put an error and a notice on one
@@ -180,6 +186,8 @@ Every list input accepts comma-separated *or* newline-separated values. `split_l
 | `extensions`   | `-E`                                    |
 | `enable`       | `-e`                                    |
 | `disable`      | `-d`                                    |
+| `only_blocks`  | `--only-block`                          |
+| `skip_blocks`  | `--skip-block`                          |
 | `ignore`       | `--ignore`                              |
 | `suppress`     | `--suppress`                            |
 | `suppress_from`| `--suppress-from`                       |
@@ -194,6 +202,14 @@ the action's own, do not reach blockwatch at all, and are described under
 [Reporting](#reporting).
 
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
+
+`only_blocks` and `skip_blocks` (blockwatch 0.10.0+) carry block addresses, `FILE:BLOCK_NAME` — the first two
+segments of a suppression address — and are plain lists with the same comma limit as `suppress` below. They are
+mutually exclusive too, and nothing is validated here either. Unlike a suppression, an address has to match: a
+malformed one is rejected by clap (exit 2), and one that names no block in its file fails the run (exit 1), both
+quoting the address. blockwatch makes that check against the file on disk, so a block that `globs`, `ignore` or
+`only_changed` leaves out of the run still matches. A skipped block can still be the target of `affects` or
+`same-as`.
 
 `suppress` (blockwatch 0.5.2+) carries violation addresses, `FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]]`, and is a
 plain list like the rest — the `:` separators survive `split_list` untouched, since it splits only on commas and
@@ -269,8 +285,9 @@ which for the step is the repository root. Nothing is validated here: a missing 
 path named. Without the input, blockwatch reads `blockwatch.toml` at the repository root when there is one —
 that takes no code here. The file's `ignore` and `extensions` add to the inputs' (the input wins for the same
 extension), while `enable`/`disable` *replace* the file's selection, so `disable: line-count` turns back on a
-validator the file disables. That is blockwatch's rule, documented in the input descriptions and the README
-rather than worked around. Blocks the file declares (`[[block]]`, virtual blocks) report their violations
+validator the file disables; `only_blocks`/`skip_blocks` replace its `only-blocks`/`skip-blocks` the same
+way. That is blockwatch's rule, documented in the input descriptions and the README rather than worked
+around. Blocks the file declares (`[[block]]`, virtual blocks) report their violations
 against the file they wrap, in the same diagnostics format, so the reporting needs nothing for them either.
 
 `globs` are positional, so they are appended last and nothing may follow them in the argument list. Since blockwatch 0.4.0 they only ever *narrow* a run — they intersect with whatever the mode selected instead of adding files back — so the array no longer needs to record whether any glob survived. Since 0.9.0 an entry may also be a plain file or directory path, and one that selects no file to check fails the run (with `only_changed`, any file in the repository counts, not only a changed one). Nothing here validates that either, and every `globs` in `local-test.yml` has to select a file the case can check.

@@ -273,6 +273,11 @@ def blockwatch_args(suppression_file: str) -> list[str]:
         ("-E", env("INPUT_EXTENSIONS")),
         ("-e", env("INPUT_ENABLE")),
         ("-d", env("INPUT_DISABLE")),
+        # Addresses of named blocks, FILE:BLOCK_NAME, whose `:` split_list
+        # leaves alone. Unlike a suppression, one that matches no block fails
+        # the run, and blockwatch is the one able to say so: it reads the file.
+        ("--only-block", env("INPUT_ONLY_BLOCKS")),
+        ("--skip-block", env("INPUT_SKIP_BLOCKS")),
         ("--ignore", env("INPUT_IGNORE")),
         # Addresses of violations to report but not fail on. Nothing is checked
         # here: blockwatch rejects a malformed address naming the segment at
