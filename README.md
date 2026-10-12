@@ -211,7 +211,7 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 GitHub-hosted runners (`ubuntu-latest`, `macos-latest`, `windows-latest`) work out of the box. Prebuilt binaries are installed with `cargo-binstall` (no Rust toolchain needed).
 
 Self-hosted runners require:
-- **Actions Runner 2.327.1+ and glibc 2.28+** (Node 24 required for checkout and cache actions; Alpine, CentOS 7, and Ubuntu 18.04 are not supported)
+- **Actions Runner 2.327.1+ and glibc 2.28+** (Node 24 required for checkout and cache actions; Alpine, CentOS 7, and Ubuntu 18.04 are not supported). On ARM64 Linux the prebuilt blockwatch binary needs **glibc 2.30+**, which rules out RHEL 8 and Debian 10 there
 - **git 2.18+**
 - **bash** (Git Bash on Windows)
 - **curl**, plus **tar** (Linux) or **unzip** (macOS/Windows)

@@ -150,7 +150,7 @@ Seven sequential steps, each with a non-obvious constraint:
 
 The version is pinned deliberately, not resolved dynamically: bump the string in step 3 when a new blockwatch release should be picked up. There's no Dependabot or other automation for this — it doesn't track arbitrary strings inside `action.yml`.
 
-Self-hosted runners are supported but assume no Rust toolchain; the requirements they *do* have to satisfy (runner ≥ 2.327.1, glibc ≥ 2.28, git ≥ 2.18, `bash`, `curl` + `tar`/`unzip`, egress) are listed in the README. Keep those two in sync when bumping the pinned action versions.
+Self-hosted runners are supported but assume no Rust toolchain; the requirements they *do* have to satisfy (runner ≥ 2.327.1, glibc ≥ 2.28 — 2.30 on ARM64 Linux, where the blockwatch binary sets the floor — git ≥ 2.18, `bash`, `curl` + `tar`/`unzip`, egress) are listed in the README. Keep those two in sync when bumping the pinned action versions, and when bumping blockwatch: the highest `GLIBC_` version in `llvm-readelf -V` of each Linux release binary is its floor.
 
 ### Why the logic is in a script
 
