@@ -26,11 +26,13 @@ repos:
     hooks:
       # `language: system` because these tests run the real blockwatch binary
       # and real git against a throwaway repository; the isolated virtualenv
-      # pre-commit would otherwise build has neither. A missing blockwatch
-      # fails the run with the install command named, rather than skipping.
+      # pre-commit would otherwise build has neither. A missing blockwatch, or
+      # one other than the version action.yml pins, fails the run with the
+      # install command named, rather than skipping. action.yml is among the
+      # files so that the commit bumping that version runs them too.
       - id: run-tests
         name: run.py tests
         entry: python3 scripts/run_test.py
         language: system
-        files: ^scripts/.*\.py$
+        files: ^(scripts/.*\.py|action\.yml)$
         pass_filenames: false

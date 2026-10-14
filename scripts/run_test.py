@@ -7,7 +7,8 @@ address format, message wording) is read back from the diagnostics it emitted,
 never hardcoded, so a change there is not a failure here. The one exception is
 the half-open range convention, which run.py exists to translate: the column
 test asserts the conversion, so a blockwatch that stopped reporting an
-exclusive end would rightly fail it. `blockwatch` must be on PATH.
+exclusive end would rightly fail it. `blockwatch` must be on PATH, at the
+version action.yml pins.
 
 python3 scripts/run_test.py          # or: python3 -m pytest scripts/run_test.py
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +26,7 @@ import unittest
 from typing import Any, Dict
 
 RUN_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run.py")
+ACTION_YML = os.path.join(os.path.dirname(os.path.dirname(RUN_PY)), "action.yml")
 JsonObject = Dict[str, Any]
 
 # A sorted block, and the same block with its entries swapped.
@@ -33,11 +36,34 @@ SORTED_VEG = '<!-- <block name="veg" keep-sorted> -->\n- carrot\n- potato\n<!-- 
 UNSORTED_VEG = '<!-- <block name="veg" keep-sorted> -->\n- potato\n- carrot\n<!-- </block> -->\n'
 
 
+def pinned_version() -> str:
+    """The blockwatch version action.yml installs, from its "Set blockwatch version" step."""
+    with open(ACTION_YML, encoding="utf-8") as handle:
+        match = re.search(r'"version=([^"]+)"', handle.read())
+    if match is None:
+        raise RuntimeError("No pinned blockwatch version found in %s." % ACTION_YML)
+    return match.group(1)
+
+
 def setUpModule() -> None:
+    pinned = pinned_version()
     if shutil.which("blockwatch") is None:
         raise RuntimeError(
             "blockwatch is not on PATH. These tests feed the action real diagnostics "
-            "rather than a frozen copy of them. Install it with: cargo binstall blockwatch"
+            "rather than a frozen copy of them. Install it with: cargo binstall blockwatch@%s"
+            % pinned
+        )
+
+    # The tests check run.py against the blockwatch the action installs. Another
+    # version can fail them, or pass them, for a reason no consumer will see.
+    version = subprocess.run(
+        ["blockwatch", "--version"], capture_output=True, text=True, check=True
+    ).stdout
+    installed = version.strip().rpartition(" ")[2]
+    if installed != pinned:
+        raise RuntimeError(
+            "blockwatch %s is on PATH, but action.yml pins %s. Install it with: "
+            "cargo binstall blockwatch@%s" % (installed, pinned, pinned)
         )
 
 

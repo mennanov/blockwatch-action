@@ -72,12 +72,16 @@ pyrefly check                   # preset and disabled codes come from pyproject.
 ```
 
 The tests run the script as a subprocess against a **real git repository and the real blockwatch
-binary** — nothing is stubbed, and the module refuses to run if `blockwatch` is not on `PATH`. The
+binary** — nothing is stubbed, and the module refuses to run if `blockwatch` is not on `PATH`, or
+is not the version `action.yml` pins (read from its `version=` line, with the install command for
+that version in the error). The
 binary is there to supply realistic input, not to be the subject: **every assertion is about what
 `run.py` does with what it was given.** blockwatch's own contract — the column base, the address
 format, the wording of a message — is read back out of the diagnostics the script replayed and
 compared against the annotation, never hardcoded, so a blockwatch release that changes any of it is
-not a failure here. That is deliberate: it is not this repository's job to test the linter.
+not a failure here. That is deliberate: it is not this repository's job to test the linter. The
+version check does not contradict it: it makes sure the binary under test is the one consumers get,
+so a bump means installing the new release locally first, and the tests then run against it.
 
 The question to ask of a new case is *would this fail if `run.py` broke, or only if blockwatch
 changed?* Two earlier cases failed it and were dropped: one asserting that `globs` narrow a run
@@ -114,7 +118,8 @@ The first two hooks come from upstream (`psf/black-pre-commit-mirror` and
 contributor needs nothing but pre-commit; both already scope themselves to Python files, so editing
 the README or `action.yml` runs neither. Only the tests are a `local` hook, and the one thing to
 know about it is `language: system`: they drive the real blockwatch binary and real git, which the
-isolated virtualenv pre-commit would otherwise build does not have.
+isolated virtualenv pre-commit would otherwise build does not have. It runs on `action.yml` as well
+as the Python, so the commit that bumps the pinned version is checked against the binary installed.
 
 Three details worth keeping:
 
