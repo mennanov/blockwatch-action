@@ -55,7 +55,7 @@ inputs:
     required: false
     default: 'false'
   annotations:
-    description: 'Report each violation as a GitHub annotation ("true", the default), so it appears on the line itself in the pull request and in the check run of the job, on top of the job log'
+    description: 'Report each violation as a GitHub annotation ("true", the default), so it appears on the line itself in the pull request and in the check run of the job, on top of the job log. A run blockwatch cannot finish, such as for a malformed tag, is reported as one annotation with its error'
     required: false
     default: 'true'
   annotations_limit:

@@ -283,17 +283,22 @@ class RunTest(ActionTestCase):
         # The diagnostics still reach the log; only the reporting is off.
         self.assertIn("keep-sorted", result.stderr)
 
-    def test_output_that_is_not_diagnostics_is_replayed_but_not_annotated(self) -> None:
+    def test_a_run_that_cannot_finish_is_annotated_with_blockwatchs_error(self) -> None:
         self.break_fruit()
 
-        # An address of five segments, where blockwatch takes at most four, is
-        # refused with a plain-text usage error instead of a document. Whatever
-        # it says has to reach the log unparsed.
-        result = self.run_action(INPUT_SUPPRESS="docs/a.md:fruit:keep-sorted:0:extra")
+        # A suppression file that does not exist stops the run with a plain-text
+        # error instead of a document, so the violation is never reported.
+        result = self.run_action(INPUT_SUPPRESS_FROM="no-such-file.txt")
 
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertTrue(result.stderr.strip())
-        self.assertEqual(result.annotations, [])
+        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.levels, ["error"])
+        (annotation,) = result.annotations
+        # The error names no line, so it is attached to no file.
+        self.assertNotIn("file", annotation.properties)
+        # It carries all of what blockwatch said, which the log has verbatim,
+        # rather than wording of the action's own.
+        message = annotation.message.replace("%0A", "\n").replace("%0D", "\r")
+        self.assertEqual(message.replace("%25", "%"), result.stderr.strip())
 
     def test_push_to_a_new_branch_still_produces_a_diff(self) -> None:
         self.break_fruit()

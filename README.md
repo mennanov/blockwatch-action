@@ -172,6 +172,9 @@ Suppress with: blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
   one is a **notice**, because it does not.
 - Blocks that are named carry their suppression address into the annotation, ready to
   copy into a commit message or the `suppress` input.
+- A run blockwatch cannot finish (a malformed tag, a missing config or `suppress_from` file,
+  an `only_blocks` address that matches no block) checks nothing and reports no violation.
+  Its error becomes one **error** annotation of its own, attached to no file.
 - The same violations are written to the **job summary** as a table. GitHub caps how many
   annotations it renders but does not cap the summary, so the table is where a long list
   stays complete.

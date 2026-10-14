@@ -44,6 +44,10 @@ SUPPRESS_LINE: re.Pattern[str] = re.compile(r"^[ \t]*blockwatch-suppress:", re.I
 # remainder. The job summary is rejected outright above 1 MiB, hence its own cap.
 SUMMARY_ROW_LIMIT: int = 1000
 
+# What blockwatch exits with, since 0.11.0, when the run cannot finish: a bad
+# flag, config file or tag, an unreadable file. 1 means only a violation.
+RUN_FAILED: int = 2
+
 
 class Failure(Exception):
     """An input or environment problem that should fail the step by itself."""
@@ -550,6 +554,7 @@ def parse_diagnostics(text: str, output_format: str) -> list[Violation]:
     Output that is not a parseable document is left alone: a usage error
     (a glob that selects no file, a malformed suppression address) arrives on the
     same stream, is already in the log verbatim, and names no line to point at.
+    `emit_run_error` annotates it instead.
 
     Which parser to use is decided by the input rather than by inspecting the
     document: the JSON diagnostics are keyed by file path, so a repository
@@ -617,6 +622,19 @@ def emit_annotations(violations: list[Violation], limit: int) -> None:
         )
 
 
+def emit_run_error(stderr: str) -> None:
+    """Annotate a run blockwatch could not finish, with blockwatch's own error.
+
+    Such a run reports no violation, so without this the check run shows only
+    the exit code and the reason is in the job log alone. The error names no
+    line to point at, so the annotation is attached to no file. It is not a
+    violation either, so `annotations_limit` does not count it.
+    """
+    message = stderr.strip() or "blockwatch exited with code %d and gave no reason." % RUN_FAILED
+    title = escape_property("blockwatch: the run could not finish")
+    print("::error title=%s::%s" % (title, escape_data(message)))
+
+
 def write_summary(violations: list[Violation]) -> None:
     path = env("GITHUB_STEP_SUMMARY")
     if not path or not violations:
@@ -681,6 +699,8 @@ def main() -> int:
             violations = parse_diagnostics(diagnostics, scalar(env("INPUT_FORMAT")))
             if annotations:
                 emit_annotations(violations, limit)
+                if status == RUN_FAILED:
+                    emit_run_error(diagnostics)
             if summary:
                 write_summary(violations)
         except Exception as error:

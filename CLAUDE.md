@@ -315,8 +315,12 @@ The mechanics, in the order they bite:
   Since blockwatch 0.11.0, `1` means only that an unsuppressed error violation was found;
   a run that could not finish (a bad flag, config file or tag, an unreadable file,
   `check-ai` without an API key) exits `2`, with a plain-text error on stderr in place of
-  the diagnostics. Nothing here depends on the difference: the error is no document, so
-  `parse_diagnostics` yields no violation, and the code passes through unchanged.
+  the diagnostics. That error is no document, so `parse_diagnostics` yields no violation;
+  `emit_run_error` turns it into one error annotation instead, so the reason reaches the
+  check run and not only the log. It is the whole of blockwatch's stderr, unparsed, and
+  attached to no file, since it names no line. It is gated on `annotations` like the rest
+  but not counted against `annotations_limit`, which caps violations; the job summary is
+  left alone. The code itself passes through unchanged.
 - **Which parser runs is decided by the `format` input, never by sniffing the document.**
   The JSON diagnostics are keyed by file path, so a repository containing a file named
   `runs` would otherwise read as a SARIF log. Both filters emit the same 10 fields, so
