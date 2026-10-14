@@ -206,7 +206,7 @@ the action's own, do not reach blockwatch at all, and are described under
 `only_blocks` and `skip_blocks` (blockwatch 0.10.0+) carry block addresses, `FILE:BLOCK_NAME` — the first two
 segments of a suppression address — and are plain lists with the same comma limit as `suppress` below. They are
 mutually exclusive too, and nothing is validated here either. Unlike a suppression, an address has to match: a
-malformed one is rejected by clap (exit 2), and one that names no block in its file fails the run (exit 1), both
+malformed one is rejected by clap (exit 2), and one that names no block in its file fails the run (exit 2 too), both
 quoting the address. blockwatch makes that check against the file on disk, so a block that `globs`, `ignore` or
 `only_changed` leaves out of the run still matches. A skipped block can still be the target of `affects` or
 `same-as`.
@@ -222,7 +222,7 @@ fail the run.
 `suppress_from` (blockwatch 0.5.4+) is a list of *paths* to files carrying `blockwatch-suppress: ADDRESS`
 lines — the same addresses, read from a file rather than written into the workflow. Every other line in the
 file is ignored. It accumulates with `suppress`; neither overrides the other. Nothing is validated here
-either: an unreadable path fails the step with the path named (exit 1), which is the right outcome — an
+either: an unreadable path fails the step with the path named (exit 2), which is the right outcome — an
 action that skipped a missing suppression file would fail the run on the violations instead, pointing the
 reader at the code rather than at the typo.
 
@@ -312,6 +312,11 @@ The mechanics, in the order they bite:
   [Run mode](#run-mode)) — so blockwatch's is the only code left to carry. Reporting
   failures are caught and downgraded to a warning: the violations are in the log either
   way, and an annotator bug must not turn a passing run into a failing one, or the reverse.
+  Since blockwatch 0.11.0, `1` means only that an unsuppressed error violation was found;
+  a run that could not finish (a bad flag, config file or tag, an unreadable file,
+  `check-ai` without an API key) exits `2`, with a plain-text error on stderr in place of
+  the diagnostics. Nothing here depends on the difference: the error is no document, so
+  `parse_diagnostics` yields no violation, and the code passes through unchanged.
 - **Which parser runs is decided by the `format` input, never by sniffing the document.**
   The JSON diagnostics are keyed by file path, so a repository containing a file named
   `runs` would otherwise read as a SARIF log. Both filters emit the same 10 fields, so
