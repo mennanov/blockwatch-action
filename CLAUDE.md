@@ -264,7 +264,9 @@ ignores every line that isn't an address. Three details are load-bearing:
 Two consequences worth keeping in mind, both in the README under Known limitations: anyone who can open a
 pull request can suppress a violation inside it, and a line that *starts* with `blockwatch-suppress:` but
 carries a malformed address (too many `:` segments, or a trailing one) fails the step rather than being
-skipped. A mid-sentence mention or a `>`-quoted line is not matched, so ordinary prose is safe.
+skipped. Since blockwatch 0.12.0 so does one that carries no address at all, which 0.11 skipped — a bare
+prefix left in a pull request template now fails every run that reads it. A mid-sentence mention or a
+`>`-quoted line is not matched, so ordinary prose is safe.
 
 The block sits before the `globs` call on purpose: globs are positional and nothing may be appended to
 the argument list after them.

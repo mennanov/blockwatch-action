@@ -197,7 +197,7 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
 - **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
-- **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax will fail the step.
+- **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax, or with no address at all (such as a placeholder left in a pull request template), will fail the step.
 - **Initial push on new branch, and force-pushes**: GitHub provides no previous base commit for a newly pushed branch, and the one a force-push replaced is no longer fetched, so only the head commit is diffed against its first parent, and only its message is read for suppressions. Earlier commits in that push are checked once a PR is opened.
 - **Annotations appear inline only on changed lines**: GitHub renders an annotation in
   the *Files changed* tab only where the pull request touches that line. In the default
