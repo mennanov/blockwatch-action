@@ -118,7 +118,7 @@ runs:
       # a stale key would serve the old binary under the new version's name.
       # scripts/run_test.py reads it from here too, and refuses to run against
       # a blockwatch of any other version.
-      run: echo "version=0.16.1" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.16.2" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
