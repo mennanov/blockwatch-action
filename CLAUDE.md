@@ -27,7 +27,7 @@ act push -W .github/workflows/local-test.yml -e /tmp/push.json
 
 The bare `act -W ...` defaults to `push`, so it takes that same head-commit path.
 
-`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `config`, `only_changed`, `skip_blocks`, `only_blocks`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
+`act` cannot run a single step; `local-test.yml` has one job (`test-action`) whose steps are the individual cases (varied inputs, no inputs, `enable`, `disable`, `verbosity`, `format`, `suppress`, `suppress_from`, `suppress_from_commits` and `suppress_from_description`, `config`, `only_changed`, `skip_blocks`, `only_blocks`, and the `annotations` group at the end). To exercise one case in isolation, temporarily comment out the others.
 
 Every case but the last group passes, which cannot exercise the reporting: a clean run
 produces no diagnostics to annotate. The two files in `testdata/` violate `keep-sorted` on
@@ -93,7 +93,7 @@ review and in the flag table above.
 They import nothing from `run.py` — rearranging its internals must not touch them — and each test
 builds its own repository with `HOME` redirected into it, so no global git config reaches in. The
 file is ordered by importance, most critical first; unittest still runs them alphabetically.
-Coverage is deliberately partial: the thirteen cases are the ones whose failure would be worst, not
+Coverage is deliberately partial: the sixteen cases are the ones whose failure would be worst, not
 every branch. The job summary is not among them.
 
 Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
@@ -204,7 +204,8 @@ Every list input accepts comma-separated *or* newline-separated values. `split_l
 
 `annotations`, `annotations_limit` and `summary` are the exception to that table: they are
 the action's own, do not reach blockwatch at all, and are described under
-[Reporting](#reporting).
+[Reporting](#reporting). So are `suppress_from_commits` and `suppress_from_description`, which
+decide what goes into the suppression file described below.
 
 `enable` and `disable` are mutually exclusive in blockwatch itself; the action does not validate this.
 
@@ -231,10 +232,17 @@ either: an unreadable path fails the step with the path named (exit 2), which is
 action that skipped a missing suppression file would fail the run on the violations instead, pointing the
 reader at the code rather than at the typo.
 
-The step also builds a suppression file of its own, unconditionally, so a suppression can travel in the
-commit that needs it. It collects the commit messages under test and, on a pull request, the description,
-and appends one more `--suppress-from` for the result; no extraction is needed, since blockwatch already
-ignores every line that isn't an address. Three details are load-bearing:
+The step also builds a suppression file of its own, so a suppression can travel in the commit that needs
+it. It collects the commit messages under test and, on a pull request, the description, and appends one
+more `--suppress-from` for the result; no extraction is needed, since blockwatch already ignores every
+line that isn't an address. `suppress_from_commits` and `suppress_from_description` (both default `true`)
+drop a source from that file. When neither applies to the run there is no file and no flag, and
+`emit_annotations` offers the address for the `suppress` input instead of a line that would do nothing:
+`write_suppression_file` returning `None` is the signal for both. A push never has a description, so
+`suppress_from_commits: false` alone reaches that state there. Two sources are deliberate, not one: a
+commit takes a push, which a review can notice, while a description edit takes effect without one. The
+ignored commit lines are listed in the log, which is why the messages are read even when they are off;
+a description that is off is not read at all, so its API call goes too. Three details are load-bearing:
 
 - **The revision range mirrors the diff.** `push_base` resolves where a push starts once, in `main`, and
   both `git_log_messages` and `diff_command` take its result, precisely so the two cannot drift: what is
@@ -261,17 +269,20 @@ ignores every line that isn't an address. Three details are load-bearing:
   (prefix at line start, leading whitespace trimmed, case-insensitive) but decides nothing; drift there
   mislabels a line, it does not suppress one.
 
-Two consequences worth keeping in mind, both in the README under Known limitations: anyone who can open a
-pull request can suppress a violation inside it, and a line that *starts* with `blockwatch-suppress:` but
-carries a malformed address (too many `:` segments, or a trailing one) fails the step rather than being
-skipped. Since blockwatch 0.12.0 so does one that carries no address at all, which 0.11 skipped — a bare
-prefix left in a pull request template now fails every run that reads it. A mid-sentence mention or a
-`>`-quoted line is not matched, so ordinary prose is safe.
+Two consequences worth keeping in mind, both in the README under Known limitations: by default anyone who
+can open a pull request can suppress a violation inside it, and a line that *starts* with
+`blockwatch-suppress:` but carries a malformed address (too many `:` segments, or a trailing one) fails the
+step rather than being skipped. Since blockwatch 0.12.0 so does one that carries no address at all, which
+0.11 skipped — a bare prefix left in a pull request template now fails every run that reads it. A
+mid-sentence mention or a `>`-quoted line is not matched, so ordinary prose is safe. Turning a source off
+removes both for that source, but it only moves a suppression into the diff: a pull request can still edit
+the workflow, `blockwatch.toml`, a `suppress_from` file or the block tags, which is for code owners to
+guard, not this action.
 
 The block sits before the `globs` call on purpose: globs are positional and nothing may be appended to
 the argument list after them.
 
-`only_changed` is a boolean, so it does not go through `split_list` either. It arrives as a string — composite actions have no typed inputs — and `parse_bool` accepts `true`/`True`/`TRUE` and `false`/`False`/`FALSE`/empty. Anything else raises and exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan. `annotations` and `summary` use the same helper for the same reason — a mistyped value there would silently turn reporting off.
+`only_changed` is a boolean, so it does not go through `split_list` either. It arrives as a string — composite actions have no typed inputs — and `parse_bool` accepts `true`/`True`/`TRUE` and `false`/`False`/`FALSE`/empty. Anything else raises and exits 1 rather than being read as false: nothing downstream would report `only_changed: yes` silently turning into a whole-repository scan. `annotations` and `summary` use the same helper for the same reason — a mistyped value there would silently turn reporting off — as do `suppress_from_commits` and `suppress_from_description`, where it would silently leave a source on.
 
 `verbosity` is the one input that does **not** go through `split_list`: it's a single clap enum (`none`/`summary`/`full`), not a list, and splitting a comma-separated value would emit `--verbosity` twice, which clap resolves by silently keeping the last one. `scalar` strips its whitespace instead, and it is appended only when non-empty. The level isn't validated here — blockwatch rejects an unknown one with a clear error. Its report goes to stdout while violations go to stderr, so the two stay separable.
 

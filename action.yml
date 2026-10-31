@@ -35,9 +35,17 @@ inputs:
     required: false
     default: ''
   suppress_from:
-    description: 'Extra files to read suppression addresses from (comma separated), e.g. "notes.txt". Every "blockwatch-suppress: ADDRESS" line in the file suppresses that violation; all other lines are ignored. Read in addition to the commit messages under test, and a pull request description, which are always read'
+    description: 'Extra files to read suppression addresses from (comma separated), e.g. "notes.txt". Every "blockwatch-suppress: ADDRESS" line in the file suppresses that violation; all other lines are ignored. Read in addition to the commit messages under test and a pull request description, unless suppress_from_commits or suppress_from_description turn those off'
     required: false
     default: ''
+  suppress_from_commits:
+    description: 'Read "blockwatch-suppress: ADDRESS" lines from the commit messages under test ("true", the default). Set to "false" where commit authors should not be able to suppress a violation: the lines are then ignored and the log lists them'
+    required: false
+    default: 'true'
+  suppress_from_description:
+    description: 'Read "blockwatch-suppress: ADDRESS" lines from a pull request description ("true", the default). The description is read as it stands when the run starts, so a line added after a review takes effect on a re-run without a new commit. Set to "false" to stop reading it'
+    required: false
+    default: 'true'
   globs:
     description: 'Files, directories or glob patterns to check (comma separated), from the repository root. They narrow the run: only the files they select are checked. One that selects no file to check fails the run'
     required: false
@@ -201,6 +209,8 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_SUPPRESS: ${{ inputs.suppress }}
         INPUT_SUPPRESS_FROM: ${{ inputs.suppress_from }}
+        INPUT_SUPPRESS_FROM_COMMITS: ${{ inputs.suppress_from_commits }}
+        INPUT_SUPPRESS_FROM_DESCRIPTION: ${{ inputs.suppress_from_description }}
         INPUT_GLOBS: ${{ inputs.globs }}
         INPUT_VERBOSITY: ${{ inputs.verbosity }}
         INPUT_FORMAT: ${{ inputs.format }}

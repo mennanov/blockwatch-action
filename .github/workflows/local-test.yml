@@ -96,6 +96,14 @@ jobs:
           verbosity: "summary"
           globs: "**/*.md,**/*.yml"
 
+      - name: Run blockwatch Action (Suppress From Commits And Description Off)
+        uses: ./
+        with:
+          suppress_from_commits: "false"
+          suppress_from_description: "false"
+          verbosity: "summary"
+          globs: "**/*.md"
+
       # Written outside the checkout: a blockwatch.toml at the repository root
       # would be read by every other case as well.
       - name: Write a config file

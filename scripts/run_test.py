@@ -192,6 +192,15 @@ class ActionTestCase(unittest.TestCase):
         )
         return Result(process)
 
+    def run_pull_request(self, body: str, **inputs: str) -> Result:
+        self.git("update-ref", "refs/remotes/origin/main", self.base_sha)
+        return self.run_action(
+            event={"pull_request": {"number": 1, "body": body}},
+            event_name="pull_request",
+            GITHUB_BASE_REF="main",
+            **inputs,
+        )
+
 
 class RunTest(ActionTestCase):
     def test_annotation_mirrors_the_diagnostic_it_came_from(self) -> None:
@@ -276,6 +285,54 @@ class RunTest(ActionTestCase):
         # This changes the outcome while appearing nowhere in the workflow file,
         # so the log has to say it happened.
         self.assertIn("suppression addresses found", result.stdout)
+
+    def test_commit_message_cannot_suppress_when_commits_are_turned_off(self) -> None:
+        self.break_fruit("break the order\n\nblockwatch-suppress: docs/a.md\n")
+
+        result = self.run_action(INPUT_SUPPRESS_FROM_COMMITS="false")
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.levels, ["error"])
+        # Whoever wrote the line has to be able to find out it did nothing.
+        self.assertIn("were ignored", result.stdout)
+        self.assertIn("blockwatch-suppress: docs/a.md", result.stdout)
+        # A push has no description either, so no line can reach this run, and
+        # the annotation must not offer one. The address stays.
+        ((_, entries),) = result.diagnostics.items()
+        (annotation,) = result.annotations
+        self.assertNotIn("blockwatch-suppress:", annotation.message)
+        self.assertIn(entries[0]["address"], annotation.message)
+
+    def test_description_cannot_suppress_when_description_is_turned_off(self) -> None:
+        self.break_fruit()
+        body = "blockwatch-suppress: docs/a.md"
+
+        read = self.run_pull_request(body)
+        self.assertEqual(read.exit_code, 0)
+        self.assertEqual(read.levels, ["notice"])
+
+        ignored = self.run_pull_request(body, INPUT_SUPPRESS_FROM_DESCRIPTION="false")
+        self.assertEqual(ignored.exit_code, 1)
+        self.assertEqual(ignored.levels, ["error"])
+        self.assertIn("description not read", ignored.stdout)
+        # Commit messages are still read, so a line can still reach this run.
+        ((_, entries),) = ignored.diagnostics.items()
+        self.assertEqual(ignored.annotations[0].address, entries[0]["address"])
+
+    def test_malformed_line_in_a_source_turned_off_cannot_fail_the_run(self) -> None:
+        # No block is broken, so the bare prefix is all that can fail this run.
+        self.write("docs/notes.md", "Prose, revised.\n")
+        self.commit("revise the notes\n\nblockwatch-suppress:\n")
+        body = "blockwatch-suppress:"
+
+        self.assertEqual(self.run_pull_request(body).exit_code, 2)
+
+        result = self.run_pull_request(
+            body, INPUT_SUPPRESS_FROM_COMMITS="false", INPUT_SUPPRESS_FROM_DESCRIPTION="false"
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.annotations, [])
 
     def test_sarif_and_json_produce_identical_annotations(self) -> None:
         self.break_fruit()

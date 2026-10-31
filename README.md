@@ -26,6 +26,8 @@ By default, this checks every block in the repository and uses the git diff to i
 | `config` | | Config file to read instead of `blockwatch.toml`. See [Config file](#config-file) |
 | `suppress` | | Violations to report without failing the run (e.g. `"docs/cli.md:cli-docs:keep-sorted"`) |
 | `suppress_from` | | Files containing suppression addresses. See [Suppressing violations](#suppressing-violations) |
+| `suppress_from_commits` | `"true"` | Read suppressions from the messages of the commits in the pull request or push. See [Choosing who can suppress](#choosing-who-can-suppress) |
+| `suppress_from_description` | `"true"` | Read suppressions from a pull request description |
 | `enable` | | Comma-separated validators to run (e.g. `"keep-sorted,keep-unique"`) |
 | `disable` | | Comma-separated validators to skip (cannot be used with `enable`) |
 | `only_blocks` | | Named blocks to check, and no others, as `FILE:BLOCK_NAME` (e.g. `"docs/cli.md:cli-docs"`). See [Selecting blocks](#selecting-blocks) |
@@ -148,6 +150,30 @@ The description is read from the API when the run starts, not from the event tha
 ```
 Files use the same format: lines starting with `blockwatch-suppress: ADDRESS` are parsed, and all other lines are ignored.
 
+### Choosing who can suppress
+
+By default, whoever writes a commit or a pull request description can suppress a violation, including one their own change introduces. Where that is too much trust, such as for outside contributors or automated agents, turn those sources off:
+
+```yaml
+- uses: mennanov/blockwatch-action@v1
+  with:
+    suppress_from_commits: "false"
+    suppress_from_description: "false"
+```
+
+Each input works alone. `suppress_from_description: "false"` is the narrower choice: it stops a suppression arriving after a review without a new commit, and leaves commit messages working. With both off, a `blockwatch-suppress:` line can't change the result or fail the step. Lines ignored in commit messages are listed in the job log, and annotations point to the `suppress` input.
+
+To trust branches in your own repository but not forks:
+
+```yaml
+suppress_from_commits: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+suppress_from_description: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+```
+
+This does not separate people from agents that push to a branch in the repository. Those need the inputs set to `"false"`.
+
+These inputs move a suppression into the diff, where a reviewer sees it. They do not stop a pull request from changing what is checked: it can still edit the workflow, `blockwatch.toml`, a `suppress_from` file or the block tags themselves. To keep those under control, require review from a code owner on them.
+
 ## Verbosity and reports
 
 By default (`verbosity: "summary"`), blockwatch prints a one-line count to stdout:
@@ -171,7 +197,8 @@ Suppress with: blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
 - A violation that fails the run is an **error**; a [suppressed](#suppressing-violations)
   one is a **notice**, because it does not.
 - Blocks that are named carry their suppression address into the annotation, ready to
-  copy into a commit message or the `suppress` input.
+  copy into a commit message or the `suppress` input. When no `blockwatch-suppress:` line
+  can reach the run, the annotation offers the address for the `suppress` input alone.
 - A run blockwatch cannot finish (a malformed tag, a missing config or `suppress_from` file,
   an `only_blocks` address that matches no block) checks nothing and reports no violation.
   Its error becomes one **error** annotation of its own, attached to no file.
@@ -196,8 +223,8 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 ## Known limitations
 
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
-- **PR author suppressions**: Anyone who can open a PR or push a commit can suppress violations via `blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from.
-- **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax, or with no address at all (such as a placeholder left in a pull request template), will fail the step.
+- **PR author suppressions**: By default, anyone who can open a PR or push a commit can suppress violations via `blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from. [`suppress_from_commits` and `suppress_from_description`](#choosing-who-can-suppress) turn these sources off.
+- **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax, or with no address at all (such as a placeholder left in a pull request template), will fail the step, unless its source is turned off.
 - **Initial push on new branch, and force-pushes**: GitHub provides no previous base commit for a newly pushed branch, and the one a force-push replaced is no longer fetched, so only the head commit is diffed against its first parent, and only its message is read for suppressions. Earlier commits in that push are checked once a PR is opened.
 - **Annotations appear inline only on changed lines**: GitHub renders an annotation in
   the *Files changed* tab only where the pull request touches that line. In the default

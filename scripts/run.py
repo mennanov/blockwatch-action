@@ -229,35 +229,68 @@ def git_log_messages(event_name: str, before: str | None, current_sha: str) -> l
     return ["git", "log", "-1", "--format=%B", "HEAD"]
 
 
+def suppression_lines(text: str) -> list[str]:
+    return [line.rstrip() for line in text.split("\n") if SUPPRESS_LINE.match(line)]
+
+
 def write_suppression_file(
-    event_name: str, payload: JsonObject, before: str | None, current_sha: str
-) -> str:
+    event_name: str,
+    payload: JsonObject,
+    before: str | None,
+    current_sha: str,
+    read_commits: bool,
+    read_description: bool,
+) -> str | None:
     """Collect the commit messages, and any description, into one file.
 
     blockwatch reads `blockwatch-suppress: ADDRESS` lines out of any text and
     ignores every other line, so no extraction is needed — a commit message is
     valid input as it stands. This is additive: the `suppress` and
     `suppress_from` inputs still apply.
+
+    Returns None when neither source applies to this run, so that nobody can
+    suppress a violation with a line in a message and the caller can say so.
     """
+    log = subprocess.run(
+        git_log_messages(event_name, before, current_sha),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    messages = log.stdout.decode("utf-8", "replace")
+
+    sources: list[str] = []
+    if read_commits:
+        sources.append(messages)
+    else:
+        # The messages are still read for this one note: someone who wrote a
+        # line expecting it to work has no other way to learn that it did not.
+        ignored = suppression_lines(messages)
+        if ignored:
+            print("Note: suppress_from_commits is false, so these commit lines were ignored:")
+            for line in ignored:
+                print(line)
+
+    if event_name == "pull_request":
+        if read_description:
+            body, source = pull_request_body(payload)
+            sources.append("\n%s\n" % body)
+            print("Note: pull request description read from %s." % source)
+        else:
+            print("Note: pull request description not read: suppress_from_description is false.")
+
+    if not sources:
+        return None
+
+    text = "".join(sources)
     handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
     with handle:
-        log = subprocess.run(
-            git_log_messages(event_name, before, current_sha),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        handle.write(log.stdout.decode("utf-8", "replace"))
-        if event_name == "pull_request":
-            body, source = pull_request_body(payload)
-            handle.write("\n%s\n" % body)
-            print("Note: pull request description read from %s." % source)
+        handle.write(text)
 
     # A suppression picked up here changes the exit code without appearing
     # anywhere in the workflow file, so the log is the only place a reader can
     # find out it happened. This only labels the lines; blockwatch remains the
     # one deciding which of them take effect.
-    with open(handle.name, encoding="utf-8") as written:
-        found = [line.rstrip() for line in written if SUPPRESS_LINE.match(line)]
+    found = suppression_lines(text)
     if found:
         print("Note: suppression addresses found in the commit messages/description under test:")
         for line in found:
@@ -270,7 +303,7 @@ def write_suppression_file(
 # --------------------------------------------------------------------------
 
 
-def blockwatch_args(suppression_file: str) -> list[str]:
+def blockwatch_args(suppression_file: str | None) -> list[str]:
     """Everything after `blockwatch`, in the order blockwatch needs it."""
     args: list[str] = []
     for flag, value in (
@@ -294,7 +327,8 @@ def blockwatch_args(suppression_file: str) -> list[str]:
         for item in split_list(value):
             args += [flag, item]
 
-    args += ["--suppress-from", suppression_file]
+    if suppression_file:
+        args += ["--suppress-from", suppression_file]
 
     # Scalars, not lists: a comma in either would emit the flag twice, and clap
     # answers a repeated single-value flag by silently keeping the last. Unknown
@@ -587,7 +621,13 @@ def escape_property(value: str) -> str:
     return escape_data(value).replace(":", "%3A").replace(",", "%2C")
 
 
-def emit_annotations(violations: list[Violation], limit: int) -> None:
+def emit_annotations(violations: list[Violation], limit: int, lines_suppress: bool) -> None:
+    """Print one workflow command per violation, up to `limit`.
+
+    `lines_suppress` is whether a `blockwatch-suppress:` line can reach this
+    run. Offering one when it cannot would send the reader to a fix that does
+    nothing.
+    """
     emitted = 0
     omitted = 0
     for violation in violations:
@@ -611,7 +651,10 @@ def emit_annotations(violations: list[Violation], limit: int) -> None:
         if violation.address:
             # Concatenated, not %-formatted: the literal "%0A" is a newline for
             # the runner and a format specifier for Python.
-            message += "%0ASuppress with: blockwatch-suppress: " + violation.address
+            if lines_suppress:
+                message += "%0ASuppress with: blockwatch-suppress: " + violation.address
+            else:
+                message += "%0ASuppress with the suppress input: " + violation.address
         print("::%s %s::%s" % (violation.level, ",".join(properties), message))
         emitted += 1
 
@@ -669,6 +712,12 @@ def main() -> int:
         annotations = parse_bool("annotations", env("INPUT_ANNOTATIONS"), default=True)
         summary = parse_bool("summary", env("INPUT_SUMMARY"), default=True)
         only_changed = parse_bool("only_changed", env("INPUT_ONLY_CHANGED"))
+        read_commits = parse_bool(
+            "suppress_from_commits", env("INPUT_SUPPRESS_FROM_COMMITS"), default=True
+        )
+        read_description = parse_bool(
+            "suppress_from_description", env("INPUT_SUPPRESS_FROM_DESCRIPTION"), default=True
+        )
         limit = parse_limit(env("INPUT_ANNOTATIONS_LIMIT"))
     except Failure as error:
         print("Error: %s." % error, file=sys.stderr)
@@ -679,7 +728,9 @@ def main() -> int:
     current_sha = env("GITHUB_SHA")
 
     before = push_base(event_name, payload)
-    suppression_file = write_suppression_file(event_name, payload, before, current_sha)
+    suppression_file = write_suppression_file(
+        event_name, payload, before, current_sha, read_commits, read_description
+    )
     args = blockwatch_args(suppression_file)
     command = diff_command(event_name, before, current_sha)
 
@@ -698,7 +749,7 @@ def main() -> int:
         try:
             violations = parse_diagnostics(diagnostics, scalar(env("INPUT_FORMAT")))
             if annotations:
-                emit_annotations(violations, limit)
+                emit_annotations(violations, limit, suppression_file is not None)
                 if status == RUN_FAILED:
                     emit_run_error(diagnostics)
             if summary:
