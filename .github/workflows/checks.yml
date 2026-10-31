@@ -16,9 +16,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # The test hook drives the real blockwatch binary, and the action is what
-      # knows which version to install — running it here keeps that version in
-      # one place. Reporting is off so this adds no annotations of its own.
+      # The tests in the pre-commit step below need blockwatch at the version
+      # action.yml pins. Running this action installs that version, so it isn't
+      # repeated here. The action also checks this repository, and a violation
+      # fails the job. Reporting is off so this step adds no annotations.
       - name: Install blockwatch
         uses: ./
         with:

@@ -235,6 +235,7 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
   drops the rest without saying so, so the action emits at most `annotations_limit` (50 by
   default) and reports how many it left out. The job summary lists up to 1000 of them.
 - **Events without diffs**: `workflow_dispatch` and `schedule` scan the full repository without diff context, so validators that depend on knowing what changed (such as `affects`) cannot check for simultaneous updates.
+- **Pinning this action by commit SHA covers actions, not binaries**: Every action it calls is pinned by commit SHA, so a SHA pin here fixes all the action code that runs. On a cache miss, `cargo-binstall` and `blockwatch` are still downloaded by version from their GitHub Releases.
 
 ## Runner requirements
 

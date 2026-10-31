@@ -124,9 +124,10 @@ jobs:
           verbosity: "summary"
 
       # The fixtures of the annotation cases below hold the only named blocks in
-      # the repository, so these two borrow them. Each passes only because its
-      # input reached blockwatch: without it, a fixture's keep-sorted violation
-      # fails the step. So neither needs continue-on-error, and neither annotates.
+      # the repository that violate on purpose, so these two borrow them. Each
+      # passes only because its input reached blockwatch: without it, a fixture's
+      # keep-sorted violation fails the step. So neither needs continue-on-error,
+      # and neither annotates.
       - name: Run blockwatch Action (Skip Blocks)
         uses: ./
         with:

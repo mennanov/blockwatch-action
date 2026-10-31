@@ -81,9 +81,15 @@ inputs:
 
 runs:
   using: 'composite'
+  # Every action below is pinned to a full commit SHA, with its version in a
+  # trailing comment that Dependabot bumps along with it. A tag can move, so a
+  # consumer pinning this action by SHA would otherwise still run whatever a
+  # nested tag points at that day. The forbidden pattern keeps a new step from
+  # bringing a tag back.
+  # <block name="pinned-actions" line-pattern-forbidden="uses:\s+[\w.-]+/[\w.-]+@v\d">
   steps:
     - name: Checkout repository
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # The diff commands below name revisions that predate the checkout (a PR
         # base, the tip before a push). A default depth-1 clone contains none of
@@ -131,7 +137,7 @@ runs:
 
     - name: Cache blockwatch binary
       id: cache-blockwatch
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ${{ steps.cargo-bin.outputs.dir }}/blockwatch
@@ -143,7 +149,9 @@ runs:
 
     - name: Install cargo-binstall
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
-      uses: cargo-bins/cargo-binstall@v1.24.0
+      # <block name="binstall-ref" same-as=":binstall-input" same-as-pattern="# v(?P<value>\d+\.\d+\.\d+)">
+      uses: cargo-bins/cargo-binstall@422f3094be6a0843857aa008b499caaf6bce0da8 # v1.24.0
+      # </block>
       with:
         # Two independent pins are required. The `uses:` ref above fixes the
         # action and the install script it runs; this input fixes the executable
@@ -152,9 +160,12 @@ runs:
         # cargo-binstall release reaches every consumer of this action, and only
         # on a cache miss, making the breakage intermittent and hard to trace.
         #
-        # Dependabot updates the ref but has no way to see this input, so the two
-        # have to be re-synced by hand whenever its grouped PR lands.
-        version: 'v1.21.1'
+        # Dependabot updates the ref and its comment but has no way to see this
+        # input, so the two have to be re-synced by hand. The same-as blocks fail
+        # its pull request until they are.
+        # <block name="binstall-input" same-as=":binstall-ref" same-as-pattern="version: 'v(?P<value>\d+\.\d+\.\d+)'">
+        version: 'v1.24.0'
+        # </block>
 
     - name: Install blockwatch
       if: steps.cache-blockwatch.outputs.cache-hit != 'true'
@@ -227,3 +238,4 @@ runs:
         # The description itself is read from GITHUB_EVENT_PATH, so it needs no
         # variable of its own and never passes through an expression.
         GH_TOKEN: ${{ github.token }}
+  # </block>
