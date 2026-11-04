@@ -164,7 +164,7 @@ runs:
         # input, so the two have to be re-synced by hand. The same-as blocks fail
         # its pull request until they are.
         # <block name="binstall-input" same-as=":binstall-ref" same-as-pattern="version: 'v(?P<value>\d+\.\d+\.\d+)'">
-        version: 'v1.24.0'
+        version: 'v1.26.1'
         # </block>
 
     - name: Install blockwatch
