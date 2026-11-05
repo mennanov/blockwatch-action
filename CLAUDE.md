@@ -422,6 +422,17 @@ Consumers reference `mennanov/blockwatch-action@v1`. A release is two tags on on
 version tag **and** the `v1` tag force-moved to it. `v1` tracks the latest release, so a release that
 only creates the version tag reaches nobody.
 
+[`.github/workflows/release.yml`](.github/workflows/release.yml) cuts both tags after a merge to
+`main`, so merging is the release. It tags a commit only when all of these are true:
+
+- "Checks" and "Local Test" both passed on it.
+- It is ahead of the latest version tag, so a late CI run can't move `v1` back.
+- `action.yml` or `scripts/run.py` differs from the latest version tag. Nothing else reaches
+  consumers.
+
+Each run that tags nothing says why in a notice. To retry a release, run the workflow by hand from
+the Actions tab. Tag by hand, with the steps below, only when the workflow can't.
+
 **Take the next version from the tags, never from memory or from this file.** The latest release is:
 
 ```shell
