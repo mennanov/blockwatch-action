@@ -1,0 +1,88 @@
+name: Release
+
+# Consumers use `@v1`, so a merge reaches them only once a version tag is cut
+# and `v1` is moved to it. This workflow does both, so merging is the release.
+#
+# It waits for CI through `workflow_run`: a tag must never point at a commit
+# whose checks failed. Each of the two workflows below triggers it once per
+# commit. The first trigger finds the other workflow still running and stops.
+# The second one cuts the release.
+on:
+  workflow_run:
+    workflows: [Checks, Local Test]
+    types: [completed]
+    branches: [main]
+  # Retries a release that a failed run left undone. The same checks apply.
+  workflow_dispatch:
+
+# Two triggers for one commit can finish together. Running them one after the
+# other lets the second see the tag the first pushed, and stop.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  # To push the tags.
+  contents: write
+  # To read the CI results of the commit.
+  actions: read
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    # A pull request's CI also triggers this workflow. Only a push to main may
+    # release.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    steps:
+      # Pinned by SHA, like the steps in action.yml: this job can move `v1`, so
+      # it must not run code that a moved tag points at.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # The next version comes from the tags, and the diff below needs the
+          # latest tag's commit.
+          fetch-depth: 0
+
+      - name: Tag the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          for workflow in checks.yml local-test.yml; do
+            result=$(gh run list --workflow "$workflow" --commit "$SHA" --event push --limit 1 \
+              --json status,conclusion --jq '.[0] | "\(.status)/\(.conclusion)"')
+            if [ "$result" != "completed/success" ]; then
+              echo "::notice::No release: $workflow is '$result' on $SHA."
+              exit 0
+            fi
+          done
+
+          # The version sort matters: a plain sort puts v1.1.9 after v1.1.10.
+          latest=$(git tag --list 'v*.*.*' --sort=-v:refname | head -1)
+
+          # A commit behind the latest release can finish CI after it, when two
+          # pull requests merge close together. Tagging it would move v1 back.
+          if ! git merge-base --is-ancestor "$latest" "$SHA"; then
+            echo "::notice::No release: $SHA is not ahead of $latest."
+            exit 0
+          fi
+          # Consumers run only these two files. A change to the README, the
+          # tests or the workflows ships nothing new. This also stops a second
+          # run for a commit that is already the latest release.
+          if git diff --quiet "$latest" "$SHA" -- action.yml scripts/run.py; then
+            echo "::notice::No release: action.yml and scripts/run.py are the same as in $latest."
+            exit 0
+          fi
+
+          next=$(echo "$latest" | awk -F. '{ printf "%s.%s.%d", $1, $2, $3 + 1 }')
+          git tag "$next" "$SHA"
+          git tag --force v1 "$SHA"
+          git push origin "refs/tags/$next"
+          git push --force origin refs/tags/v1
+          echo "::notice::Released $next at $SHA, and moved v1 to it."
