@@ -132,7 +132,7 @@ runs:
       # a stale key would serve the old binary under the new version's name.
       # scripts/run_test.py reads it from here too, and refuses to run against
       # a blockwatch of any other version.
-      run: echo "version=0.18.0" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.18.1" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
@@ -179,7 +179,24 @@ runs:
         # and dies on the missing toolchain with "cargo: command not found",
         # which sends the reader after the wrong problem. Refusing to compile
         # names the real one: no binary is published for this platform.
-        cargo-binstall --no-confirm --disable-strategies compile "blockwatch@${{ steps.blockwatch-version.outputs.version }}"
+        # It is also what keeps --only-signed meaningful: that flag covers only
+        # downloaded archives, and when the signature check fails binstall falls
+        # through to building from source. Where `cargo` exists (a rust container,
+        # a self-hosted runner with a toolchain) that build would succeed,
+        # unverified, and be cached under the release's version.
+        #
+        # quick-install is banned with it: that fallback downloads a binary the
+        # third-party quickinstall project built, not one blockwatch released.
+        #
+        # --only-signed fails the install unless the archive carries a valid
+        # minisign signature from the key in the crate's Cargo.toml. binstall
+        # already checks when the crate declares a key; the flag makes the check
+        # this action's requirement, so a bump to a version without a key fails
+        # instead of installing unchecked. Releases before 0.18.1 are unsigned.
+        # A missing or bad signature shows as a "No signature present" (or
+        # verification) warning, followed by the same final "Fallback to
+        # cargo-install is disabled" a rate limit ends with — read the warning.
+        cargo-binstall --no-confirm --only-signed --disable-strategies compile,quick-install "blockwatch@${{ steps.blockwatch-version.outputs.version }}"
       shell: bash
       env:
         # binstall finds the release through api.github.com. Anonymously that is
