@@ -3,7 +3,7 @@ description: 'Runs the blockwatch linter to analyze dependent blocks of code'
 
 inputs:
   extensions:
-    description: 'Extensions to pass to blockwatch in the format "key1=value1,key2=value2". Added to the "extensions" of blockwatch.toml; this input wins for the same extension'
+    description: 'Map an extension or a whole file name to a supported one (comma separated), e.g. "cu=cpp,Earthfile=dockerfile". Added to the "extensions" of blockwatch.toml; this input wins for the same extension'
     required: false
     default: ''
   enable:
@@ -132,7 +132,7 @@ runs:
       # a stale key would serve the old binary under the new version's name.
       # scripts/run_test.py reads it from here too, and refuses to run against
       # a blockwatch of any other version.
-      run: echo "version=0.18.1" >> "$GITHUB_OUTPUT"
+      run: echo "version=0.19.1" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Cache blockwatch binary
