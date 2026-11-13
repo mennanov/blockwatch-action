@@ -32,7 +32,7 @@ By default, this checks every block in the repository and uses the git diff to i
 | `disable` | | Comma-separated validators to skip (cannot be used with `enable`) |
 | `only_blocks` | | Named blocks to check, and no others, as `FILE:BLOCK_NAME` (e.g. `"docs/cli.md:cli-docs"`). See [Selecting blocks](#selecting-blocks) |
 | `skip_blocks` | | Named blocks to leave unchecked (cannot be used with `only_blocks`) |
-| `extensions` | | File extension mappings, e.g. `"cxx=cpp"` |
+| `extensions` | | Map an extension or a whole file name to a supported one, e.g. `"cu=cpp,Earthfile=dockerfile"` |
 | `verbosity` | `"summary"` | Output verbosity: `"none"`, `"summary"` (counts), or `"full"` (JSON) |
 | `format` | `"json"` | Output format: `"json"` or `"sarif"` (SARIF 2.1.0) |
 | `annotations` | `"true"` | Report each violation as a GitHub annotation. See [Annotations](#annotations) |
