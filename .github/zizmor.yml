@@ -1,0 +1,12 @@
+# zizmor configuration.
+#
+# Workflows in this repo invoke `uses: ./` rather than `uses: $/` so that:
+# 1. `action.yml` keeps its nested `uses:` pinned by commit SHA for downstream
+#    consumers that do not use workflow lockfiles (or use GHES / require SHA
+#    pinning).
+# 2. Local testing with `nektos/act` keeps working (act does not yet support `$/`).
+rules:
+  self-repository:
+    ignore:
+      - checks.yml
+      - local-test.yml

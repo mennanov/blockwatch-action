@@ -8,7 +8,7 @@ name: Release
 # commit. The first trigger finds the other workflow still running and stops.
 # The second one cuts the release.
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers] guarded below: push events from github.repository only
     workflows: [Checks, Local Test]
     types: [completed]
     branches: [main]
@@ -37,15 +37,16 @@ jobs:
       (github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     steps:
-      # Pinned by SHA, like the steps in action.yml: this job can move `v1`, so
+      # Pinned via .github/workflows/actions.lock: this job can move `v1`, so
       # it must not run code that a moved tag points at.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           # The next version comes from the tags, and the diff below needs the
           # latest tag's commit.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Tag the release
         env:
@@ -83,6 +84,13 @@ jobs:
           next=$(echo "$latest" | awk -F. '{ printf "%s.%s.%d", $1, $2, $3 + 1 }')
           git tag "$next" "$SHA"
           git tag --force v1 "$SHA"
-          git push origin "refs/tags/$next"
-          git push --force origin refs/tags/v1
+          basic_auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          push_with_token() {
+            GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+              GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic_auth}" \
+              git push "$@"
+          }
+          push_with_token origin "refs/tags/$next"
+          push_with_token --force origin refs/tags/v1
           echo "::notice::Released $next at $SHA, and moved v1 to it."

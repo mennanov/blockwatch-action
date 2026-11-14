@@ -10,15 +10,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   test-action:
     runs-on: ubuntu-latest
     name: Test Action
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run blockwatch Action
         uses: ./
