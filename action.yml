@@ -95,10 +95,13 @@ runs:
         # base, the tip before a push). A default depth-1 clone contains none of
         # them, and the diff fails to resolve.
         fetch-depth: 0
+        # The action only runs local git commands, so no credentials need to be
+        # persisted on disk.
+        persist-credentials: false
 
     - name: Resolve cargo bin directory
       id: cargo-bin
-      run: |
+      run: | # zizmor: ignore[github-env] CARGO_BIN comes from runner CARGO_* env vars, not untrusted input
         # cargo installs into $CARGO_INSTALL_ROOT/bin, falling back to
         # $CARGO_HOME/bin and then ~/.cargo/bin. That precedence is mirrored here
         # rather than assumed: images that relocate CARGO_HOME (the official
@@ -196,9 +199,10 @@ runs:
         # A missing or bad signature shows as a "No signature present" (or
         # verification) warning, followed by the same final "Fallback to
         # cargo-install is disabled" a rate limit ends with — read the warning.
-        cargo-binstall --no-confirm --only-signed --disable-strategies compile,quick-install "blockwatch@${{ steps.blockwatch-version.outputs.version }}"
+        cargo-binstall --no-confirm --only-signed --disable-strategies compile,quick-install "blockwatch@$BLOCKWATCH_VERSION"
       shell: bash
       env:
+        BLOCKWATCH_VERSION: ${{ steps.blockwatch-version.outputs.version }}
         # binstall finds the release through api.github.com. Anonymously that is
         # 60 requests an hour per IP.  The job token
         # is rate-limited per repository instead. Any token will do, read-only

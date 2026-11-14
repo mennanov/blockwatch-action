@@ -1,4 +1,4 @@
-# Formatting, types and tests for the Python in scripts/, before a commit lands.
+# Formatting, types, tests, and GitHub Actions security checks, before a commit lands.
 #
 # Install once per clone — pre-commit does not arm itself:
 #
@@ -21,6 +21,12 @@ repos:
     rev: 1.3.0
     hooks:
       - id: pyrefly-check
+
+  # Zizmor audits GitHub Actions workflows, action.yml, and Dependabot config.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.32.0
+    hooks:
+      - id: zizmor
 
   - repo: local
     hooks:

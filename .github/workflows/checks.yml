@@ -8,30 +8,54 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
     name: Pre-commit
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       # The tests in the pre-commit step below need blockwatch at the version
       # action.yml pins. Running this action installs that version, so it isn't
       # repeated here. The action also checks this repository, and a violation
       # fails the job. Reporting is off so this step adds no annotations.
       - name: Install blockwatch
-        uses: ./
+        uses: $/
         with:
           verbosity: "none"
           annotations: "false"
           summary: "false"
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.x"
 
-      # Runs the same three hooks as a local commit, over every file.
+      # Runs the same hooks as a local commit, over every file.
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
+
+  # Fails when .github/workflows/actions.lock is out of sync with the
+  # workflows or a locked pin no longer verifies upstream.
+  lockfile:
+    runs-on: ubuntu-slim
+    name: Lockfile
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install gh-actions-lock
+        run: gh extension install github/gh-actions-lock --pin v0.4.1
+      - name: Verify actions lockfile
+        run: gh actions-lock --verify
