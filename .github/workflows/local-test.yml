@@ -217,10 +217,15 @@ jobs:
           globs: "testdata/suppressed-fixture.bwfixture"
           suppress: "testdata/suppressed-fixture.bwfixture"
 
+      # A PR under test may itself carry unrelated `blockwatch-suppress:`
+      # directives in its commits or description, so assert valid JSON arrays
+      # that never include the workflow-`suppress` fixture address rather than `[]`.
       - name: Verify action outputs for workflow-suppressed violation
         env:
           COMMIT_SUPPRESSIONS: ${{ steps.suppressed_annotations.outputs.commit_suppressions }}
           DESCRIPTION_SUPPRESSIONS: ${{ steps.suppressed_annotations.outputs.description_suppressions }}
         run: |
-          test "$COMMIT_SUPPRESSIONS" = "[]"
-          test "$DESCRIPTION_SUPPRESSIONS" = "[]"
+          test -n "$COMMIT_SUPPRESSIONS"
+          test -n "$DESCRIPTION_SUPPRESSIONS"
+          printf '%s\n' "$COMMIT_SUPPRESSIONS" | jq -e 'type == "array" and all(.[]; .address != "testdata/suppressed-fixture.bwfixture")' >/dev/null
+          printf '%s\n' "$DESCRIPTION_SUPPRESSIONS" | jq -e 'type == "array" and all(.[]; .address != "testdata/suppressed-fixture.bwfixture")' >/dev/null
