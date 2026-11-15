@@ -1,0 +1,45 @@
+name: E2E Suppression UI
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  e2e-suppression:
+    runs-on: ubuntu-latest
+    name: E2E Suppression Check
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run blockwatch-action
+        id: e2e
+        uses: $/
+        with:
+          extensions: "e2edoc=md"
+          globs: "e2e/*.e2edoc"
+          verbosity: "full"
+
+      - name: Show exported suppression outputs
+        if: always()
+        env:
+          COMMIT_SUPPRESSIONS: ${{ steps.e2e.outputs.commit_suppressions }}
+          DESCRIPTION_SUPPRESSIONS: ${{ steps.e2e.outputs.description_suppressions }}
+        run: |
+          {
+            echo ""
+            echo "### Exported Action Outputs (E2E Step)"
+            echo '```json'
+            jq -n \
+              --argjson c "${COMMIT_SUPPRESSIONS:-[]}" \
+              --argjson d "${DESCRIPTION_SUPPRESSIONS:-[]}" \
+              '{commit_suppressions: $c, description_suppressions: $d}'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

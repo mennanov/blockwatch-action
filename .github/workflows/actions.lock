@@ -10,6 +10,11 @@ workflows:
         - 'actions/setup-python@v7.1.0'
         - 'cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40'
         - 'pre-commit/action@v3.0.1'
+    '.github/workflows/e2e-suppression-ui.yml':
+        - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
+        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+        - 'actions/checkout@v7.0.1'
+        - 'cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40'
     '.github/workflows/local-test.yml':
         - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'

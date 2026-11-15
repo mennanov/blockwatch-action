@@ -1,0 +1,10 @@
+# Suppression E2E Test Fixture
+
+Temporary file on `e2e/suppression-ui` to exercise suppression annotations,
+job summaries, and outputs in the GitHub PR UI against `feat/suppression-visibility`.
+
+<!-- <block name="sorted-list" keep-sorted> -->
+- zebra
+- apple
+- mango
+<!-- </block> -->
