@@ -35,6 +35,7 @@ class ActionConfig:
     annotations: bool
     annotations_limit: int
     summary: bool
+    comment: bool
     only_changed: bool
     suppress_from_commits: bool
     suppress_from_description: bool
@@ -103,6 +104,7 @@ def read_config() -> ActionConfig:
         annotations=parse_bool("annotations", env("INPUT_ANNOTATIONS"), default=True),
         annotations_limit=parse_limit(env("INPUT_ANNOTATIONS_LIMIT")),
         summary=parse_bool("summary", env("INPUT_SUMMARY"), default=True),
+        comment=parse_bool("comment", env("INPUT_COMMENT"), default=True),
         only_changed=parse_bool("only_changed", env("INPUT_ONLY_CHANGED")),
         suppress_from_commits=parse_bool(
             "suppress_from_commits", env("INPUT_SUPPRESS_FROM_COMMITS"), default=True

@@ -373,8 +373,14 @@ The mechanics, in the order they bite:
   `notice`. The annotation carries the violation's suppression address when the block has a name
   (unnamed blocks have no address). That address is otherwise only in the JSON.
 - **Step outputs (`GITHUB_OUTPUT`) record detected commit and PR-description suppression
-  directives (`commit_suppressions`, `description_suppressions`)** regardless of `annotations`
-  or `summary` settings (using single-line `json.dumps` bounded at 512 KiB).
+  directives (`commit_suppressions`, `description_suppressions`)** regardless of `annotations`,
+  `summary`, or `comment` settings (using single-line `json.dumps` bounded at 512 KiB).
+- **Sticky PR suppression comments (`comment`, default `true`)** are synced by
+  [`scripts/blockwatch_action/github_api.py`](scripts/blockwatch_action/github_api.py) on `pull_request`
+  runs so suppressions are visible on the PR Overview timeline too (marker `<!-- blockwatch-action:suppressions -->`,
+  capped at 50 rows and 60,000 characters). Unchanged comments skip `PATCH`, cleared directives `DELETE` any
+  existing sticky comment, and read-only tokens (`HTTP 403` from `pull-requests: read` or fork PRs) log a note
+  without failing the step.
 - **Python 3 is the only runtime requirement** the reporting adds, and the wrapper prefers
   `python3`, falling back to `python` for Git Bash on the Windows runners. `jq` and `curl`
   are not used by this step at all any more. The README lists it under requirements.

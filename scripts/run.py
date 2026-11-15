@@ -25,10 +25,13 @@ from blockwatch_action.config import (
     read_config,
 )
 from blockwatch_action.diagnostics import classify_violations, parse_diagnostics
+from blockwatch_action.github_api import sync_pull_request_comment
 from blockwatch_action.reporting import (
+    COMMENT_MARKER,
     emit_annotations,
     emit_run_error,
     emit_suppression_annotations,
+    render_pr_comment,
     write_outputs,
     write_summary,
 )
@@ -58,8 +61,10 @@ def report_run_outcome(
     collection: SuppressionCollection,
     status: int,
     diagnostics: str,
+    event_name: str,
+    payload: dict[str, object],
 ) -> None:
-    """Emit annotations and job summary without affecting step verdict."""
+    """Emit annotations, job summary, and sticky PR comment without affecting step verdict."""
     # Reporting must never decide the outcome: the violations are in the log
     # either way, so a failure here is worth a warning and no more.
     lines_suppress = collection.lines_suppress
@@ -74,6 +79,11 @@ def report_run_outcome(
                 emit_run_error(diagnostics)
         if config.summary:
             write_summary(violations, collection.directives, lines_suppress, run_failed)
+        if config.comment and event_name == "pull_request":
+            comment_body = render_pr_comment(
+                violations, collection.directives, lines_suppress, run_failed
+            )
+            sync_pull_request_comment(payload, COMMENT_MARKER, comment_body)
     except Exception as error:
         print(
             "::warning title=blockwatch::Could not turn the blockwatch "
@@ -114,7 +124,7 @@ def main() -> int:
         sys.stdout.flush()
         sys.stderr.write(diagnostics)
         sys.stderr.flush()
-        report_run_outcome(config, collection, status, diagnostics)
+        report_run_outcome(config, collection, status, diagnostics, event_name, payload)
 
     # blockwatch's exit code is what fails the job. Reporting only changes where
     # diagnostics and suppression attempts are shown.

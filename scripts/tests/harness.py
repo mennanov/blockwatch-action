@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from typing import Any, Dict
 
 SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -138,34 +139,130 @@ class Result:
 
 
 class FakeGitHubApi:
-    """Minimal localhost HTTP server emulating `/repos/<repo>/pulls/<number>`."""
+    """Minimal localhost HTTP server emulating PR description and issue comment APIs."""
 
     def __init__(
         self,
         status: int = 200,
         body: str | None = "",
         raw_body: bytes | None = None,
+        comments: list[JsonObject] | None = None,
+        comments_status: int | None = None,
+        comment_write_status: int = 200,
+        comments_page_size: int | None = None,
     ) -> None:
         self.status = status
         self.body = body
         self.raw_body = raw_body
+        self.comments: list[JsonObject] = list(comments or [])
+        self.comments_status = status if comments_status is None else comments_status
+        self.comment_write_status = comment_write_status
+        self.comments_page_size = comments_page_size
         self.requests: list[tuple[str, dict[str, str]]] = []
+        self.comment_requests: list[tuple[str, str, dict[str, str], JsonObject | None]] = []
+        self._next_id = max([int(c.get("id", 0)) for c in self.comments] + [0]) + 1
         parent = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            def _send_json(
+                self, code: int, payload: bytes, extra_headers: dict[str, str] | None = None
+            ) -> None:
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                for key, value in (extra_headers or {}).items():
+                    self.send_header(key, value)
+                self.end_headers()
+                if payload:
+                    self.wfile.write(payload)
+
+            def _read_json_body(self) -> JsonObject | None:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not length:
+                    return None
+                raw = self.rfile.read(length)
+                parsed = json.loads(raw.decode("utf-8"))
+                return parsed if isinstance(parsed, dict) else None
+
+            def _headers(self) -> dict[str, str]:
+                return {key.lower(): value for key, value in self.headers.items()}
+
             def do_GET(self) -> None:
-                headers = {key.lower(): value for key, value in self.headers.items()}
+                parsed = urllib.parse.urlparse(self.path)
+                headers = self._headers()
+                if parsed.path.endswith("/comments"):
+                    parent.comment_requests.append(("GET", self.path, headers, None))
+                    if parent.comments_status >= 400:
+                        self._send_json(parent.comments_status, b'{"message":"error"}')
+                        return
+                    query = urllib.parse.parse_qs(parsed.query)
+                    page = int(query.get("page", ["1"])[0])
+                    page_size = parent.comments_page_size or len(parent.comments) or 100
+                    start = (page - 1) * page_size
+                    items = parent.comments[start : start + page_size]
+                    extra: dict[str, str] = {}
+                    if start + page_size < len(parent.comments):
+                        extra["Link"] = '<%s%s?page=%d>; rel="next"' % (
+                            parent.url,
+                            parsed.path,
+                            page + 1,
+                        )
+                    self._send_json(
+                        parent.comments_status,
+                        json.dumps(items).encode("utf-8"),
+                        extra,
+                    )
+                    return
+
                 parent.requests.append((self.path, headers))
-                self.send_response(parent.status)
                 payload = (
                     parent.raw_body
                     if parent.raw_body is not None
                     else json.dumps({"body": parent.body}).encode("utf-8")
                 )
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+                self._send_json(parent.status, payload)
+
+            def do_POST(self) -> None:
+                headers = self._headers()
+                data = self._read_json_body()
+                parent.comment_requests.append(("POST", self.path, headers, data))
+                if parent.comment_write_status >= 400:
+                    self._send_json(parent.comment_write_status, b'{"message":"forbidden"}')
+                    return
+                comment: JsonObject = {
+                    "id": parent._next_id,
+                    "body": str((data or {}).get("body") or ""),
+                }
+                parent._next_id += 1
+                parent.comments.append(comment)
+                self._send_json(201, json.dumps(comment).encode("utf-8"))
+
+            def do_PATCH(self) -> None:
+                headers = self._headers()
+                data = self._read_json_body()
+                parent.comment_requests.append(("PATCH", self.path, headers, data))
+                if parent.comment_write_status >= 400:
+                    self._send_json(parent.comment_write_status, b'{"message":"forbidden"}')
+                    return
+                comment_id = int(self.path.rstrip("/").rpartition("/")[2])
+                for item in parent.comments:
+                    if item.get("id") == comment_id:
+                        item["body"] = str((data or {}).get("body") or "")
+                        self._send_json(200, json.dumps(item).encode("utf-8"))
+                        return
+                self._send_json(404, b'{"message":"not found"}')
+
+            def do_DELETE(self) -> None:
+                headers = self._headers()
+                parent.comment_requests.append(("DELETE", self.path, headers, None))
+                if parent.comment_write_status >= 400:
+                    self._send_json(parent.comment_write_status, b'{"message":"forbidden"}')
+                    return
+                comment_id = int(self.path.rstrip("/").rpartition("/")[2])
+                before = len(parent.comments)
+                parent.comments = [item for item in parent.comments if item.get("id") != comment_id]
+                code = 204 if len(parent.comments) < before else 404
+                self._send_json(code, b"")
 
             def log_message(self, format: str, *args: Any) -> None:
                 pass
@@ -320,12 +417,38 @@ class ActionTestCase(unittest.TestCase):
             **inputs,
         )
 
+    def run_against_api(
+        self,
+        api: FakeGitHubApi,
+        snapshot_body: str | None = "",
+        *,
+        number: int = 1,
+        repository: str = "acme/widgets",
+        token: str = "token-123",
+        sync_base: bool = True,
+        **inputs: str,
+    ) -> Result:
+        """Execute a pull request run targeting an already-running `FakeGitHubApi`."""
+        return self.run_pull_request(
+            snapshot_body,
+            number=number,
+            sync_base=sync_base,
+            GITHUB_API_URL=api.url,
+            GH_TOKEN=token,
+            GITHUB_REPOSITORY=repository,
+            **inputs,
+        )
+
     def run_pr_api(
         self,
         *,
         status: int = 200,
         api_body: str | None = "",
         raw_body: bytes | None = None,
+        comments: list[JsonObject] | None = None,
+        comments_status: int | None = None,
+        comment_write_status: int = 200,
+        comments_page_size: int | None = None,
         snapshot_body: str | None = "",
         number: int = 1,
         repository: str = "acme/widgets",
@@ -333,14 +456,22 @@ class ActionTestCase(unittest.TestCase):
         sync_base: bool = True,
         **inputs: str,
     ) -> tuple[Result, FakeGitHubApi]:
-        with FakeGitHubApi(status=status, body=api_body, raw_body=raw_body) as api:
-            result = self.run_pull_request(
+        with FakeGitHubApi(
+            status=status,
+            body=api_body,
+            raw_body=raw_body,
+            comments=comments,
+            comments_status=comments_status,
+            comment_write_status=comment_write_status,
+            comments_page_size=comments_page_size,
+        ) as api:
+            result = self.run_against_api(
+                api,
                 snapshot_body,
                 number=number,
+                repository=repository,
+                token=token,
                 sync_base=sync_base,
-                GITHUB_API_URL=api.url,
-                GH_TOKEN=token,
-                GITHUB_REPOSITORY=repository,
                 **inputs,
             )
         return result, api

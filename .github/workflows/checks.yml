@@ -33,6 +33,7 @@ jobs:
           verbosity: "none"
           annotations: "false"
           summary: "false"
+          comment: "false"
 
       - name: Set up Python
         uses: actions/setup-python@v7.1.0

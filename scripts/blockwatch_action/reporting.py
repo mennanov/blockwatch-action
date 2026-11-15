@@ -12,10 +12,14 @@ from blockwatch_action.suppressions import SuppressionDirective
 
 # GitHub renders a limited number of annotations per step and drops the rest
 # without saying so, so the step stops at the caller's limit and reports the
-# remainder. The job summary is rejected outright above 1 MiB, hence its own cap.
+# remainder. The job summary is rejected outright above 1 MiB, hence its own cap,
+# and issue/PR comments are rejected above 65,536 characters.
 SUMMARY_ROW_LIMIT: int = 1000
 ANNOTATION_DIRECTIVE_LIMIT: int = 20
 OUTPUT_JSON_LIMIT: int = 512 * 1024
+COMMENT_MARKER: str = "<!-- blockwatch-action:suppressions -->"
+COMMENT_ROW_LIMIT: int = 50
+COMMENT_CHAR_LIMIT: int = 60000
 
 _SOURCE_LABELS: dict[str, str] = {
     "commits": "commit message",
@@ -207,6 +211,12 @@ def escape_html_cell(value: str) -> str:
     return html.escape(clean).replace("|", "&#124;")
 
 
+def _escape_html_multiline(value: str) -> str:
+    """Escape untrusted text for Markdown table cells while preserving line breaks via `<br>`."""
+    escaped = html.escape(value).replace("|", "&#124;")
+    return escaped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+
+
 def _directive_source_cell(directive: SuppressionDirective) -> str:
     if directive.source != "commits":
         return "pull request description"
@@ -251,8 +261,9 @@ def directives_summary_section(
     directives: list[SuppressionDirective],
     lines_suppress: bool,
     run_failed: bool,
+    row_limit: int = SUMMARY_ROW_LIMIT,
 ) -> str:
-    """Build the Markdown job summary section for suppression directives."""
+    """Build the Markdown section for suppression directives."""
     if lines_suppress:
         alert = [
             "> [!WARNING]",
@@ -269,9 +280,7 @@ def directives_summary_section(
                 "description, but were ignored because these sources are disabled for this run."
             ),
         ]
-    rows = [
-        format_directive_row(directive, run_failed) for directive in directives[:SUMMARY_ROW_LIMIT]
-    ]
+    rows = [format_directive_row(directive, run_failed) for directive in directives[:row_limit]]
     lines = (
         alert
         + [
@@ -349,6 +358,81 @@ def write_summary(
 
     with open(path, "a", encoding="utf-8") as handle:
         handle.write("\n\n".join(sections) + "\n")
+
+
+def _format_comment_violation_row(violation: Violation) -> str:
+    location = (
+        "<code>%s</code>" % escape_html_cell("%s:%s" % (violation.path, violation.start_line))
+        if violation.path
+        else "—"
+    )
+    by = [_SOURCE_LABELS[s] for s in violation.suppression_sources if s in _SOURCE_LABELS]
+    validator = "%s (%s)" % (escape_html_cell(violation.code), ", ".join(by))
+    message = _escape_html_multiline(violation.message)
+    address = "<code>%s</code>" % escape_html_cell(violation.address) if violation.address else "—"
+    return "| %s | %s | %s | %s |" % (location, validator, message, address)
+
+
+def _comment_suppressed_violations_section(violations: list[Violation]) -> str:
+    suppressed = [
+        violation
+        for violation in violations
+        if violation.suppressed
+        and any(source in SUPPRESSION_SOURCES for source in violation.suppression_sources)
+    ]
+    if not suppressed:
+        return ""
+    rows = [
+        _format_comment_violation_row(violation) for violation in suppressed[:COMMENT_ROW_LIMIT]
+    ]
+    lines = (
+        [
+            "### blockwatch: %d suppressed violation(s) via commit or PR description"
+            % len(suppressed),
+            "",
+            "| Location | Validator | Message | Suppress address |",
+            "| --- | --- | --- | --- |",
+        ]
+        + rows
+        + _summary_truncation_note(len(suppressed), len(rows), "violation")
+    )
+    return "\n".join(lines)
+
+
+def _truncate_comment_body(body: str, limit: int = COMMENT_CHAR_LIMIT) -> str:
+    if len(body) <= limit:
+        return body
+    note = "\n\n_Comment truncated due to GitHub size limits; see the workflow job summary for the full list._\n"
+    kept: list[str] = []
+    used = 0
+    for line in body.splitlines():
+        addition = len(line) + (1 if kept else 0)
+        if used + addition > limit - len(note):
+            break
+        kept.append(line)
+        used += addition
+    return "\n".join(kept) + note
+
+
+def render_pr_comment(
+    violations: list[Violation],
+    directives: list[SuppressionDirective],
+    lines_suppress: bool,
+    run_failed: bool,
+) -> str | None:
+    """Build the sticky PR comment Markdown, or None when no directives exist."""
+    if not directives:
+        return None
+    sections = [
+        COMMENT_MARKER,
+        directives_summary_section(
+            directives, lines_suppress, run_failed, row_limit=COMMENT_ROW_LIMIT
+        ),
+    ]
+    violations_section = _comment_suppressed_violations_section(violations)
+    if violations_section:
+        sections.append(violations_section)
+    return _truncate_comment_body("\n\n".join(sections) + "\n")
 
 
 def bounded_json_array(items: list[JsonObject], limit: int = OUTPUT_JSON_LIMIT) -> str:

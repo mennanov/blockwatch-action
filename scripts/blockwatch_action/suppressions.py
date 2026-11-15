@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
 import tempfile
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 
 from blockwatch_action.config import JsonObject, env, event_pull_request
+from blockwatch_action.github_api import fetch_pull_request_body
 
 # The address prefix blockwatch reads out of commit messages and descriptions.
 # Matched here only to name them in the log; blockwatch decides what they do.
@@ -70,43 +68,6 @@ class SuppressionCollection:
         self.cleanup()
 
 
-def _pull_request_api_url(pr: JsonObject, token: str) -> tuple[str | None, str]:
-    """Build the pull request API URL, or return a fallback description when unavailable."""
-    number = pr.get("number")
-    repository = env("GITHUB_REPOSITORY")
-    if not (
-        token
-        and repository
-        and number
-        and isinstance(number, (int, str))
-        and not isinstance(number, bool)
-    ):
-        return None, "the event payload"
-
-    api_url = env("GITHUB_API_URL", "https://api.github.com").rstrip("/")
-    if not api_url.lower().startswith(("https://", "http://")):
-        return None, "the event payload (unsupported API URL scheme)"
-
-    return "%s/repos/%s/pulls/%s" % (api_url, repository, number), ""
-
-
-def _fetch_pull_request_body(url: str, token: str) -> str:
-    """Request the current PR description text from the GitHub REST API."""
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": "Bearer %s" % token,
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "blockwatch-action",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        document = json.load(response)
-    body = (document.get("body") if isinstance(document, dict) else "") or ""
-    return str(body)
-
-
 def pull_request_body(payload: JsonObject) -> tuple[str, str]:
     """The description, read live, with the event payload as the fallback.
 
@@ -119,19 +80,7 @@ def pull_request_body(payload: JsonObject) -> tuple[str, str]:
     The live copy replaces the snapshot rather than being merged with it, so
     *removing* an address takes effect too.
     """
-    pr = event_pull_request(payload)
-    snapshot = str(pr.get("body") or "")
-    token = env("GH_TOKEN")
-    url, skip_source = _pull_request_api_url(pr, token)
-    if url is None:
-        return snapshot, skip_source
-
-    try:
-        return _fetch_pull_request_body(url, token), "the API, as it reads now"
-    except urllib.error.HTTPError as error:
-        return snapshot, "the event payload (the API answered HTTP %s)" % error.code
-    except Exception as error:  # network, DNS, timeout, malformed JSON
-        return snapshot, "the event payload (the API read failed: %s)" % error
+    return fetch_pull_request_body(payload)
 
 
 def git_log_command(event_name: str, before: str | None, current_sha: str) -> list[str]:

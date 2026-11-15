@@ -10,7 +10,7 @@ on: [push, pull_request]
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   blockwatch:
@@ -20,7 +20,7 @@ jobs:
 ```
 <!-- </block> -->
 
-By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional. Pin the action to a specific release tag (as above) or a full commit SHA rather than the moving `@v1` tag; see [What a commit SHA pin covers](#known-limitations).
+By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional. `pull-requests: write` allows the action to post or update a sticky pull request comment when `blockwatch-suppress:` directives appear in commit messages or the PR description (if omitted or running from a fork, the comment is skipped without failing). Pin the action to a specific release tag (as above) or a full commit SHA rather than the moving `@v1` tag; see [What a commit SHA pin covers](#known-limitations).
 
 ## Inputs
 
@@ -44,6 +44,7 @@ By default, this checks every block in the repository and uses the git diff to i
 | `annotations` | `"true"` | Report violations and commit/PR suppression directives as GitHub annotations. See [Annotations](#annotations) |
 | `annotations_limit` | `50` | How many violation annotations to emit at most |
 | `summary` | `"true"` | Write violations and commit/PR suppression directives to the job summary as tables |
+| `comment` | `"true"` | Post or update a sticky PR comment when commit/PR suppressions are found (needs `pull-requests: write`) |
 | `diff_pathspec` | | Additional git diff pathspecs (e.g. `":(exclude).github/"`) |
 
 List inputs accept comma-separated strings or multi-line YAML:
@@ -153,7 +154,7 @@ Add a line to a commit message or PR description:
 ```text
 blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
 ```
-The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected suppressions are printed in the job log, written to the job summary, exported via [outputs](#outputs), and surfaced as GitHub annotations (`::warning` when `suppress_from_commits` or, on a pull request, `suppress_from_description` is `"true"`, or `::notice` when neither source applies).
+The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected suppressions are printed in the job log, written to the job summary, exported via [outputs](#outputs), surfaced as GitHub annotations (`::warning` when `suppress_from_commits` or, on a pull request, `suppress_from_description` is `"true"`, or `::notice` when neither source applies), and—when `comment: "true"` and `pull-requests: write` is granted—posted as a sticky comment on the PR page (and removed again if all directives are later cleared).
 
 The description is read from the API when the run starts, not from the event that triggered it. The two differ after an edit: a re-run replays the original event, so a description-based suppression would otherwise not take effect until the next push. Reading it live means **edit the description, press Re-run, and the violation stops blocking**. The job log names which source was used; without a usable `GITHUB_TOKEN` the action falls back to the event payload.
 
@@ -246,6 +247,7 @@ Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sari
 
 - **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
 - **PR author suppressions**: By default, anyone who can open a PR or push a commit can suppress violations via `blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from. [`suppress_from_commits` and `suppress_from_description`](#choosing-who-can-suppress) turn these sources off.
+- **Sticky PR comment permissions and fork PRs**: The built-in PR suppression comment requires `pull-requests: write` permission (shown in [Quick start](#quick-start)). On workflows with `pull-requests: read` or `pull_request` runs from public forks (where GitHub restricts `GITHUB_TOKEN` to read-only), posting the comment is skipped cleanly with a log note while annotations, the job summary, and outputs still run. Set `comment: "false"` to turn off the built-in comment altogether.
 - **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax, or with no address at all (such as a placeholder left in a pull request template), will fail the step, unless its source is turned off.
 - **Initial push on new branch, and force-pushes**: GitHub provides no previous base commit for a newly pushed branch, and the one a force-push replaced is no longer fetched, so only the head commit is diffed against its first parent, and only its message is read for suppressions. Earlier commits in that push are checked once a PR is opened.
 - **Annotations appear inline only on changed lines**: GitHub renders an annotation in
