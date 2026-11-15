@@ -39,11 +39,11 @@ inputs:
     required: false
     default: ''
   suppress_from_commits:
-    description: 'Read "blockwatch-suppress: ADDRESS" lines from the commit messages under test ("true", the default). Set to "false" where commit authors should not be able to suppress a violation: the lines are then ignored and the log lists them'
+    description: 'Read "blockwatch-suppress: ADDRESS" lines from the commit messages under test ("true", the default). Set to "false" where commit authors should not be able to suppress a violation: the lines are then ignored, logged, and reported as notices (or warnings if suppress_from_description is true)'
     required: false
     default: 'true'
   suppress_from_description:
-    description: 'Read "blockwatch-suppress: ADDRESS" lines from a pull request description ("true", the default). The description is read as it stands when the run starts, so a line added after a review takes effect on a re-run without a new commit. Set to "false" to stop reading it'
+    description: 'Read "blockwatch-suppress: ADDRESS" lines from a pull request description ("true", the default). The description is read as it stands when the run starts, so a line added after a review takes effect on a re-run without a new commit. Set to "false" to stop applying suppressions from it (lines in the event payload are still logged and reported)'
     required: false
     default: 'true'
   globs:
@@ -63,21 +63,29 @@ inputs:
     required: false
     default: 'false'
   annotations:
-    description: 'Report each violation as a GitHub annotation ("true", the default), so it appears on the line itself in the pull request and in the check run of the job, on top of the job log. A run blockwatch cannot finish, such as for a malformed tag, is reported as one annotation with its error'
+    description: 'Report each violation and any commit/PR-description suppression directives as GitHub annotations ("true", the default), so they appear on the line itself in the pull request and in the check run of the job, on top of the job log. A run blockwatch cannot finish, such as for a malformed tag, is reported as one annotation with its error'
     required: false
     default: 'true'
   annotations_limit:
-    description: 'How many annotations to emit at most (default 50). GitHub renders only a limited number and drops the rest without saying so; the step reports how many it left out'
+    description: 'How many violation annotations to emit at most (default 50). GitHub renders only a limited number and drops the rest without saying so; the step reports how many it left out'
     required: false
     default: '50'
   summary:
-    description: 'Write the violations to the job summary as a table ("true", the default). GitHub does not cap it the way it caps annotations, so it is where a long list stays readable'
+    description: 'Write the violations and any commit/PR-description suppression directives to the job summary as tables ("true", the default). GitHub does not cap it the way it caps annotations, so it is where a long list stays readable'
     required: false
     default: 'true'
   diff_pathspec:
     description: "Additional git diff pathspecs to filter the diff (e.g., ':(exclude).github/' or multiple separated by spaces). Filters which changes the diff reports, not which files are scanned - use 'ignore' for that. A diff they empty is not an error: no block counts as changed, so every block is still checked, or none with only_changed"
     required: false
     default: ''
+
+outputs:
+  commit_suppressions:
+    description: 'JSON array of "blockwatch-suppress:" entries found in the commit messages under test (each with "commit", "subject", "line", "address", and "applied")'
+    value: ${{ steps.diff.outputs.commit_suppressions }}
+  description_suppressions:
+    description: 'JSON array of "blockwatch-suppress:" entries found in the pull request description (each with "line", "address", and "applied")'
+    value: ${{ steps.diff.outputs.description_suppressions }}
 
 runs:
   using: 'composite'

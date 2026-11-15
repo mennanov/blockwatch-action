@@ -210,8 +210,17 @@ jobs:
       # A suppressed violation is still reported, so it still gets an annotation
       # - as a notice rather than an error, since it does not fail the run.
       - name: Run blockwatch Action (Annotations For A Suppressed Violation)
+        id: suppressed_annotations
         uses: $/
         with:
           extensions: "bwfixture=md"
           globs: "testdata/suppressed-fixture.bwfixture"
           suppress: "testdata/suppressed-fixture.bwfixture"
+
+      - name: Verify action outputs for workflow-suppressed violation
+        env:
+          COMMIT_SUPPRESSIONS: ${{ steps.suppressed_annotations.outputs.commit_suppressions }}
+          DESCRIPTION_SUPPRESSIONS: ${{ steps.suppressed_annotations.outputs.description_suppressions }}
+        run: |
+          test "$COMMIT_SUPPRESSIONS" = "[]"
+          test "$DESCRIPTION_SUPPRESSIONS" = "[]"

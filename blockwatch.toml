@@ -1,4 +1,4 @@
-# Changes to action.yml or scripts/run.py trigger a new release in
+# Changes to action.yml or runtime scripts trigger a new release in
 # .github/workflows/release.yml, so keep the Quick start version tag in sync.
 [[block]]
 target = 'action.yml'
@@ -6,4 +6,8 @@ affects = 'README.md:quick-start'
 
 [[block]]
 target = 'scripts/run.py'
+affects = 'README.md:quick-start'
+
+[[block]]
+target = 'scripts/blockwatch_action/*.py'
 affects = 'README.md:quick-start'

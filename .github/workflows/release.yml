@@ -73,11 +73,11 @@ jobs:
             echo "::notice::No release: $SHA is not ahead of $latest."
             exit 0
           fi
-          # Consumers run only these two files. A change to the README, the
-          # tests or the workflows ships nothing new. This also stops a second
-          # run for a commit that is already the latest release.
-          if git diff --quiet "$latest" "$SHA" -- action.yml scripts/run.py; then
-            echo "::notice::No release: action.yml and scripts/run.py are the same as in $latest."
+          # Consumers run only the action definition and scripts/ runtime code.
+          # Changes to the README, tests, or workflows ship nothing new. This
+          # also stops a second run for a commit that is already the latest release.
+          if git diff --quiet "$latest" "$SHA" -- action.yml scripts/run.py scripts/blockwatch_action; then
+            echo "::notice::No release: action runtime files are the same as in $latest."
             exit 0
           fi
 

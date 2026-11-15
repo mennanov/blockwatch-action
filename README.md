@@ -16,7 +16,7 @@ jobs:
   blockwatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: mennanov/blockwatch-action@v1.1.41
+      - uses: mennanov/blockwatch-action@v1.1.42
 ```
 <!-- </block> -->
 
@@ -41,9 +41,9 @@ By default, this checks every block in the repository and uses the git diff to i
 | `extensions` | | Map an extension or a whole file name to a supported one, e.g. `"cu=cpp,Earthfile=dockerfile"` |
 | `verbosity` | `"summary"` | Output verbosity: `"none"`, `"summary"` (counts), or `"full"` (JSON) |
 | `format` | `"json"` | Output format: `"json"` or `"sarif"` (SARIF 2.1.0) |
-| `annotations` | `"true"` | Report each violation as a GitHub annotation. See [Annotations](#annotations) |
-| `annotations_limit` | `50` | How many annotations to emit at most |
-| `summary` | `"true"` | Write the violations to the job summary as a table |
+| `annotations` | `"true"` | Report violations and commit/PR suppression directives as GitHub annotations. See [Annotations](#annotations) |
+| `annotations_limit` | `50` | How many violation annotations to emit at most |
+| `summary` | `"true"` | Write violations and commit/PR suppression directives to the job summary as tables |
 | `diff_pathspec` | | Additional git diff pathspecs (e.g. `":(exclude).github/"`) |
 
 List inputs accept comma-separated strings or multi-line YAML:
@@ -53,6 +53,15 @@ ignore: |
   target/**
   dist/**
 ```
+
+## Outputs
+
+| Output | Description |
+|---|---|
+| `commit_suppressions` | JSON array of entries found in commit messages (`commit`, `subject`, `line`, `address`, `applied`) |
+| `description_suppressions` | JSON array of entries found in the PR description (`line`, `address`, `applied`) |
+
+Outputs are always populated (including when `annotations: "false"` and `summary: "false"`, or when the step fails), so downstream steps with `if: always()` can post a PR comment, apply a label, or notify a channel when `steps.<id>.outputs.commit_suppressions != '[]' || steps.<id>.outputs.description_suppressions != '[]'`.
 
 ## Diff checking and scope
 
@@ -144,7 +153,7 @@ Add a line to a commit message or PR description:
 ```text
 blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
 ```
-The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected suppressions are printed in the job log.
+The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected suppressions are printed in the job log, written to the job summary, exported via [outputs](#outputs), and surfaced as GitHub annotations (`::warning` when `suppress_from_commits` or, on a pull request, `suppress_from_description` is `"true"`, or `::notice` when neither source applies).
 
 The description is read from the API when the run starts, not from the event that triggered it. The two differ after an edit: a re-run replays the original event, so a description-based suppression would otherwise not take effect until the next push. Reading it live means **edit the description, press Re-run, and the violation stops blocking**. The job log names which source was used; without a usable `GITHUB_TOKEN` the action falls back to the event payload.
 
@@ -167,7 +176,7 @@ By default, whoever writes a commit or a pull request description can suppress a
     suppress_from_description: "false"
 ```
 
-Each input works alone. `suppress_from_description: "false"` is the narrower choice: it stops a suppression arriving after a review without a new commit, and leaves commit messages working. With both off, a `blockwatch-suppress:` line can't change the result or fail the step. Lines ignored in commit messages are listed in the job log, and annotations point to the `suppress` input.
+Each input works alone. `suppress_from_description: "false"` is the narrower choice: it stops a suppression arriving after a review without a new commit, and leaves commit messages working. With both off, a `blockwatch-suppress:` line can't change the result or fail the step: ignored lines in commit messages or the event payload's PR body are listed in the job log and job summary, emitted as `::notice` annotations (or `::warning` if the other source is enabled on a pull request), and annotations point to the `suppress` input.
 
 To trust branches in your own repository but not forks:
 
@@ -200,17 +209,24 @@ on the line it refers to in the pull request, and in the check run for the job:
 Suppress with: blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
 ```
 
-- A violation that fails the run is an **error**; a [suppressed](#suppressing-violations)
-  one is a **notice**, because it does not.
+- A violation that fails the run is an **error**; a violation [suppressed](#suppressing-violations)
+  via commit messages or a pull request description is elevated to a **warning** (alongside
+  a summary annotation naming the commit/PR directive); a violation suppressed only via
+  `suppress` or `suppress_from` stays a **notice**, because it is already configured in the
+  workflow or repository.
+- When `blockwatch-suppress:` lines appear in commit messages or the pull request description,
+  the action emits an annotation per source even when no violation matched — as a **warning**
+  when `suppress_from_commits` or (on a pull request) `suppress_from_description` is `"true"`,
+  or as a **notice** when neither applies.
 - Blocks that are named carry their suppression address into the annotation, ready to
   copy into a commit message or the `suppress` input. When no `blockwatch-suppress:` line
   can reach the run, the annotation offers the address for the `suppress` input alone.
 - A run blockwatch cannot finish (a malformed tag, a missing config or `suppress_from` file,
   an `only_blocks` address that matches no block) checks nothing and reports no violation.
   Its error becomes one **error** annotation of its own, attached to no file.
-- The same violations are written to the **job summary** as a table. GitHub caps how many
-  annotations it renders but does not cap the summary, so the table is where a long list
-  stays complete.
+- The same violations and any commit/PR-description suppression directives are written to the
+  **job summary** as tables. GitHub caps how many annotations it renders but does not cap the
+  summary, so the table is where a long list stays complete.
 - The JSON (or SARIF) diagnostics stay in the job log either way.
 
 Both formats are read, so `format` and `annotations` are independent. Set

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A single **composite GitHub Action** that installs and runs the [`blockwatch`](https://github.com/mennanov/blockwatch) Rust CLI against a repository's git diff. There is no build step. `action.yml` declares the inputs and the six install steps; the seventh step's logic — argument building, suppression sources, the diff, and the reporting — lives in [`scripts/run.py`](scripts/run.py), which is where almost every change belongs. Everything else (README, test workflow, dependabot) supports the two.
+A single **composite GitHub Action** that installs and runs the [`blockwatch`](https://github.com/mennanov/blockwatch) Rust CLI against a repository's git diff. There is no build step. `action.yml` declares the inputs and the six install steps; the seventh step's logic — argument building, suppression sources, the diff, and the reporting — enters through [`scripts/run.py`](scripts/run.py) backed by focused modules in [`scripts/blockwatch_action/`](scripts/blockwatch_action/), which is where almost every runtime change belongs. Everything else (README, test workflow, dependabot) supports those runtime files.
 
 ## Commands
 
@@ -91,10 +91,12 @@ the "nothing may follow the positional globs" invariant with no automated guard 
 review and in the flag table above.
 
 They import nothing from `run.py` — rearranging its internals must not touch them — and each test
-builds its own repository with `HOME` redirected into it, so no global git config reaches in. The
-file is ordered by importance, most critical first; unittest still runs them alphabetically.
-Coverage is deliberately partial: the sixteen cases are the ones whose failure would be worst, not
-every branch. The job summary is not among them.
+builds its own repository with `HOME` and `TMPDIR` redirected into it, so no global git config or
+host temp state reaches in. The suite is grouped in `scripts/tests/` into focused behavioral modules
+(`test_core.py`, `test_suppressions.py`, `test_pr_api.py`), ordered logically from core invariants
+to edge cases; unittest still runs them alphabetically.
+Coverage is deliberately partial: the suite covers the critical invariants (including suppression
+annotations, job summary formatting, and step outputs), not every branch.
 
 Annotations use the modern spellings (`list[str]`, `list[str] | None`), which `from __future__
 import annotations` keeps lazy, so they cost nothing at runtime on an older interpreter. The one
@@ -242,14 +244,16 @@ more `--suppress-from` for the result; no extraction is needed, since blockwatch
 line that isn't an address. `suppress_from_commits` and `suppress_from_description` (both default `true`)
 drop a source from that file. When neither applies to the run there is no file and no flag, and
 `emit_annotations` offers the address for the `suppress` input instead of a line that would do nothing:
-`write_suppression_file` returning `None` is the signal for both. A push never has a description, so
-`suppress_from_commits: false` alone reaches that state there. Two sources are deliberate, not one: a
-commit takes a push, which a review can notice, while a description edit takes effect without one. The
-ignored commit lines are listed in the log, which is why the messages are read even when they are off;
-a description that is off is not read at all, so its API call goes too. Three details are load-bearing:
+`write_suppression_file` returning `file_path=None` is the signal for both. A push never has a description,
+so `suppress_from_commits: false` alone reaches that state there. Two sources are deliberate, not one: a
+commit takes a push, which a review can notice, while a description edit takes effect without one. Ignored
+lines are still collected (from `git log` and, when `suppress_from_description` is `false`, from the event
+payload's PR body without making an API call) so they can be logged, written to the job summary, exported
+in `$GITHUB_OUTPUT`, and surfaced as annotations (`::warning` when `lines_suppress` is true, `::notice`
+when neither source applies). Three details are load-bearing:
 
 - **The revision range mirrors the diff.** `push_base` resolves where a push starts once, in `main`, and
-  both `git_log_messages` and `diff_command` take its result, precisely so the two cannot drift: what is
+  both `git_log_command` and `diff_command` take its result, precisely so the two cannot drift: what is
   allowed to suppress a violation is the same work that is being checked for one. `git log` uses two dots
   where the diff uses three — it wants the commits a PR adds, not a patch. A new branch, or a force-push
   whose replaced tip is not in the clone, falls back to the head commit alone, matching the diff's own
@@ -260,7 +264,7 @@ a description that is off is not read at all, so its API call goes too. Three de
   suppression added to the description afterwards would be invisible until the next push, which defeats
   the obvious workflow of fixing the description and pressing Re-run. `GH_TOKEN: ${{ github.token }}` is
   in the step's `env:` for this one read; a missing or restricted token, or any non-200, falls back to
-  `PR_BODY` rather than failing, and the log says which source was used. The cost is in the README under
+  the event payload rather than failing, and the log says which source was used. The cost is in the README under
   Known limitations: an edit now takes effect without a new commit, so a suppression can arrive after a
   review without disturbing the approval.
 - **Neither source is ever expanded inline.** The description is written by whoever opened the PR, a
@@ -269,7 +273,7 @@ a description that is off is not read at all, so its API call goes too. Three de
   through a file, never through an expression — the one attacker-controlled input in the step, where
   every other one comes from the workflow file or from git.
 - **The addresses found are echoed to the log.** A suppression from a commit message changes the exit code
-  while appearing nowhere in the workflow file. The `grep` that labels them mirrors blockwatch's own match
+  while appearing nowhere in the workflow file. The `SUPPRESS_LINE` regex that labels them mirrors blockwatch's own match
   (prefix at line start, leading whitespace trimmed, case-insensitive) but decides nothing; drift there
   mislabels a line, it does not suppress one.
 
@@ -363,9 +367,14 @@ The mechanics, in the order they bite:
   GitHub's dialect. Before 0.6.0 the end column was inclusive and was passed straight through;
   a run.py that kept doing that against 0.6.0 highlights one character too many. Column 0 still
   means "no column reported" and is left alone.
-- **Suppressed violations become notices, not errors**, because they do not fail the run,
-  and the annotation carries the violation's suppression address when the block has a name
+- **Suppressed violations become notices or warnings, not errors**, because they do not fail the run:
+  violations matched by commit or PR-description directives are elevated to `warning` (with a `Suppressed by:`
+  line before `Suppress with:`), while violations suppressed only via `suppress` or `suppress_from` stay
+  `notice`. The annotation carries the violation's suppression address when the block has a name
   (unnamed blocks have no address). That address is otherwise only in the JSON.
+- **Step outputs (`GITHUB_OUTPUT`) record detected commit and PR-description suppression
+  directives (`commit_suppressions`, `description_suppressions`)** regardless of `annotations`
+  or `summary` settings (using single-line `json.dumps` bounded at 512 KiB).
 - **Python 3 is the only runtime requirement** the reporting adds, and the wrapper prefers
   `python3`, falling back to `python` for Git Bash on the Windows runners. `jq` and `curl`
   are not used by this step at all any more. The README lists it under requirements.
@@ -429,8 +438,8 @@ only creates the version tag reaches nobody.
 
 - "Checks" and "Local Test" both passed on it.
 - It is ahead of the latest version tag, so a late CI run can't move `v1` back.
-- `action.yml` or `scripts/run.py` differs from the latest version tag. Nothing else reaches
-  consumers.
+- `action.yml`, `scripts/run.py`, or `scripts/blockwatch_action/` differs from the latest version
+  tag. Nothing else reaches consumers.
 
 Each run that tags nothing says why in a notice. To retry a release, run the workflow by hand from
 the Actions tab. Tag by hand, with the steps below, only when the workflow can't.

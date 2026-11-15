@@ -48,6 +48,8 @@ jobs:
   lockfile:
     runs-on: ubuntu-slim
     name: Lockfile
+    permissions:
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:

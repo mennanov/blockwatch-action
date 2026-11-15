@@ -15,6 +15,9 @@ line-length = 100
 # more than it is worth here.
 [tool.pyrefly]
 project-includes = ["scripts"]
+# `scripts/run_test.py` runs directly (`python3 scripts/run_test.py`), so Python
+# adds `scripts/` to `sys.path`; mirror that import root for type checking.
+search-path = ["scripts"]
 preset = "strict"
 
 [tool.pyrefly.errors]
