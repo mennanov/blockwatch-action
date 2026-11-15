@@ -4,17 +4,23 @@ GitHub Action that runs the [blockwatch](https://github.com/mennanov/blockwatch)
 
 ## Quick start
 
+<!-- <block name="quick-start" line-pattern-forbidden="uses:\s+mennanov/blockwatch-action@v\d+(\s|$)"> -->
 ```yaml
 on: [push, pull_request]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   blockwatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: mennanov/blockwatch-action@v1
+      - uses: mennanov/blockwatch-action@v1.1.41
 ```
+<!-- </block> -->
 
-By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional.
+By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional. Pin the action to a specific release tag (as above) or a full commit SHA rather than the moving `@v1` tag; see [What a commit SHA pin covers](#known-limitations).
 
 ## Inputs
 
