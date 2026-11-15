@@ -39,7 +39,7 @@ class PullRequestTarget:
 
 
 def resolve_pull_request_target(payload: JsonObject) -> tuple[PullRequestTarget | None, str]:
-    """Resolve pull request API coordinates, or return a fallback description when unavailable."""
+    """Resolve pull request API coordinates, returning an empty target and optional reason otherwise."""
     pr = event_pull_request(payload)
     number = pr.get("number")
     repository = env("GITHUB_REPOSITORY")
@@ -51,16 +51,22 @@ def resolve_pull_request_target(payload: JsonObject) -> tuple[PullRequestTarget 
         and isinstance(number, (int, str))
         and not isinstance(number, bool)
     ):
-        return None, "the event payload"
+        return None, ""
 
     api_url = env("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     if not api_url.lower().startswith(("https://", "http://")):
-        return None, "the event payload (unsupported API URL scheme)"
+        return None, "unsupported API URL scheme"
 
     return (
         PullRequestTarget(api_url=api_url, repository=repository, number=str(number), token=token),
         "",
     )
+
+
+def _api_error_text(error: Exception) -> str:
+    if isinstance(error, urllib.error.HTTPError):
+        return "the API answered HTTP %s" % error.code
+    return str(error)
 
 
 def _github_request(
@@ -105,17 +111,24 @@ def _next_page_url(link_header: str, api_url: str) -> str | None:
 
 
 def fetch_pull_request_body(payload: JsonObject) -> tuple[str, str]:
-    """Read the live PR description from the REST API, falling back to the event payload."""
+    """Read the live PR description from the REST API, falling back to the event payload.
+
+    The event payload is a snapshot taken when the run was created, so re-running
+    a workflow replays stale text and would hide edits made after the push. The
+    live copy replaces the snapshot rather than merging with it so removals also
+    take effect.
+    """
     pr = event_pull_request(payload)
     snapshot = str(pr.get("body") or "")
     target, skip_reason = resolve_pull_request_target(payload)
     if target is None:
-        return snapshot, skip_reason
+        detail = " (%s)" % skip_reason if skip_reason else ""
+        return snapshot, "the event payload" + detail
 
     try:
         document, _ = _github_request("GET", target.pull_url, target.token)
     except urllib.error.HTTPError as error:
-        return snapshot, "the event payload (the API answered HTTP %s)" % error.code
+        return snapshot, "the event payload (%s)" % _api_error_text(error)
     except Exception as error:  # network, DNS, timeout, malformed JSON
         return snapshot, "the event payload (the API read failed: %s)" % error
 
@@ -147,24 +160,30 @@ def _find_sticky_comment(target: PullRequestTarget, marker: str) -> tuple[int, s
     return None
 
 
+def _delete_comment(target: PullRequestTarget, comment_id: int) -> None:
+    try:
+        _github_request("DELETE", target.comment_url(comment_id), target.token)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+
+
 def _apply_comment_change(
     target: PullRequestTarget,
     existing: tuple[int, str] | None,
     body: str | None,
 ) -> None:
-    if body is None:
-        if existing is not None:
-            try:
-                _github_request("DELETE", target.comment_url(existing[0]), target.token)
-            except urllib.error.HTTPError as error:
-                if error.code != 404:
-                    raise
+    if existing is None:
+        if body is not None:
+            _github_request("POST", target.comments_url, target.token, {"body": body})
         return
 
-    if existing is None:
-        _github_request("POST", target.comments_url, target.token, {"body": body})
-    elif existing[1] != body:
-        _github_request("PATCH", target.comment_url(existing[0]), target.token, {"body": body})
+    comment_id, existing_body = existing
+    if body is None:
+        _delete_comment(target, comment_id)
+        return
+    if existing_body != body:
+        _github_request("PATCH", target.comment_url(comment_id), target.token, {"body": body})
 
 
 def sync_pull_request_comment(payload: JsonObject, marker: str, body: str | None) -> None:
@@ -172,33 +191,27 @@ def sync_pull_request_comment(payload: JsonObject, marker: str, body: str | None
     target, skip_reason = resolve_pull_request_target(payload)
     if target is None:
         if body is not None:
-            print("Note: skipped pull request suppression comment (%s)." % skip_reason)
+            detail = skip_reason or "missing token, repository, or pull request number"
+            print("Note: skipped pull request suppression comment (%s)." % detail)
         return
 
     try:
         existing = _find_sticky_comment(target, marker)
-    except urllib.error.HTTPError as error:
-        print(
-            "Note: could not read pull request suppression comments (the API answered HTTP %s)."
-            % error.code
-        )
-        return
     except Exception as error:
-        print("Note: could not read pull request suppression comments (%s)." % error)
+        print(
+            "Note: could not read pull request suppression comments (%s)." % _api_error_text(error)
+        )
         return
 
     try:
         _apply_comment_change(target, existing, body)
-    except urllib.error.HTTPError as error:
-        if error.code == 403:
+    except Exception as error:
+        if isinstance(error, urllib.error.HTTPError) and error.code == 403:
             print(
                 "Note: skipped pull request suppression comment "
                 "(HTTP 403 — workflow may lack 'pull-requests: write' permission or be from a fork)."
             )
             return
         print(
-            "Note: could not update pull request suppression comment (the API answered HTTP %s)."
-            % error.code
+            "Note: could not update pull request suppression comment (%s)." % _api_error_text(error)
         )
-    except Exception as error:
-        print("Note: could not update pull request suppression comment (%s)." % error)

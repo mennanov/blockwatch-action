@@ -20,6 +20,7 @@ from blockwatch_action.config import (
     RUN_FAILED,
     ActionConfig,
     Failure,
+    JsonObject,
     env,
     event_payload,
     read_config,
@@ -62,7 +63,7 @@ def report_run_outcome(
     status: int,
     diagnostics: str,
     event_name: str,
-    payload: dict[str, object],
+    payload: JsonObject,
 ) -> None:
     """Emit annotations, job summary, and sticky PR comment without affecting step verdict."""
     # Reporting must never decide the outcome: the violations are in the log

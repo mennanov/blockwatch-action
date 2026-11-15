@@ -148,9 +148,13 @@ def _format_violation_properties(violation: Violation) -> list[str]:
     return properties
 
 
+def _source_labels(violation: Violation) -> list[str]:
+    return [_SOURCE_LABELS[s] for s in violation.suppression_sources if s in _SOURCE_LABELS]
+
+
 def _format_violation_message(violation: Violation, lines_suppress: bool) -> str:
     message = escape_data(violation.message)
-    by = [_SOURCE_LABELS[s] for s in violation.suppression_sources if s in _SOURCE_LABELS]
+    by = _source_labels(violation)
     if by:
         message += "%0ASuppressed by: " + ", ".join(by)
     # The address is what a reader needs in order to act on the annotation, and
@@ -211,6 +215,10 @@ def escape_html_cell(value: str) -> str:
     return html.escape(clean).replace("|", "&#124;")
 
 
+def _html_code(value: str) -> str:
+    return "<code>%s</code>" % escape_html_cell(value)
+
+
 def _escape_html_multiline(value: str) -> str:
     """Escape untrusted text for Markdown table cells while preserving line breaks via `<br>`."""
     escaped = html.escape(value).replace("|", "&#124;")
@@ -221,8 +229,8 @@ def _directive_source_cell(directive: SuppressionDirective) -> str:
     if directive.source != "commits":
         return "pull request description"
     if directive.commit:
-        return "commit <code>%s</code> (%s)" % (
-            escape_html_cell(directive.commit),
+        return "commit %s (%s)" % (
+            _html_code(directive.commit),
             escape_html_cell(truncate_text(directive.subject)),
         )
     return "commit message"
@@ -244,10 +252,10 @@ def _directive_status_cell(directive: SuppressionDirective, run_failed: bool) ->
 
 def format_directive_row(directive: SuppressionDirective, run_failed: bool) -> str:
     """Format one row in the job summary's suppression directives table."""
-    return "| %s | %s | <code>%s</code> |" % (
+    return "| %s | %s | %s |" % (
         _directive_source_cell(directive),
         _directive_status_cell(directive, run_failed),
-        escape_html_cell(directive.line),
+        _html_code(directive.line),
     )
 
 
@@ -362,23 +370,20 @@ def write_summary(
 
 def _format_comment_violation_row(violation: Violation) -> str:
     location = (
-        "<code>%s</code>" % escape_html_cell("%s:%s" % (violation.path, violation.start_line))
-        if violation.path
-        else "—"
+        _html_code("%s:%s" % (violation.path, violation.start_line)) if violation.path else "—"
     )
-    by = [_SOURCE_LABELS[s] for s in violation.suppression_sources if s in _SOURCE_LABELS]
-    validator = "%s (%s)" % (escape_html_cell(violation.code), ", ".join(by))
+    validator = "%s (%s)" % (
+        escape_html_cell(violation.code),
+        ", ".join(_source_labels(violation)),
+    )
     message = _escape_html_multiline(violation.message)
-    address = "<code>%s</code>" % escape_html_cell(violation.address) if violation.address else "—"
+    address = _html_code(violation.address) if violation.address else "—"
     return "| %s | %s | %s | %s |" % (location, validator, message, address)
 
 
 def _comment_suppressed_violations_section(violations: list[Violation]) -> str:
     suppressed = [
-        violation
-        for violation in violations
-        if violation.suppressed
-        and any(source in SUPPRESSION_SOURCES for source in violation.suppression_sources)
+        violation for violation in violations if violation.suppressed and _source_labels(violation)
     ]
     if not suppressed:
         return ""
@@ -402,12 +407,16 @@ def _comment_suppressed_violations_section(violations: list[Violation]) -> str:
 def _truncate_comment_body(body: str, limit: int = COMMENT_CHAR_LIMIT) -> str:
     if len(body) <= limit:
         return body
-    note = "\n\n_Comment truncated due to GitHub size limits; see the workflow job summary for the full list._\n"
+    note = (
+        "\n\n_Comment truncated due to GitHub size limits; "
+        "see the workflow job summary for the full list._\n"
+    )
+    budget = limit - len(note)
     kept: list[str] = []
     used = 0
     for line in body.splitlines():
         addition = len(line) + (1 if kept else 0)
-        if used + addition > limit - len(note):
+        if used + addition > budget:
             break
         kept.append(line)
         used += addition

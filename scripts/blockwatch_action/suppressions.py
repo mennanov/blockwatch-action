@@ -68,21 +68,6 @@ class SuppressionCollection:
         self.cleanup()
 
 
-def pull_request_body(payload: JsonObject) -> tuple[str, str]:
-    """The description, read live, with the event payload as the fallback.
-
-    The payload is a snapshot taken when the run was created, and re-running a
-    workflow replays it. A suppression added to the description afterwards would
-    stay invisible until the next push, which defeats the obvious loop: read the
-    annotation, paste its address into the description, press Re-run, watch the
-    violation stop blocking.
-
-    The live copy replaces the snapshot rather than being merged with it, so
-    *removing* an address takes effect too.
-    """
-    return fetch_pull_request_body(payload)
-
-
 def git_log_command(event_name: str, before: str | None, current_sha: str) -> list[str]:
     """The git log command reading this run's commits for suppressions.
 
@@ -181,7 +166,7 @@ def collect_description_suppressions(
 ) -> tuple[list[SuppressionDirective], str | None]:
     """Collect PR-description suppression directives and blockwatch input when enabled."""
     if read_description:
-        body, source = pull_request_body(payload)
+        body, source = fetch_pull_request_body(payload)
         print("Note: pull request description read from %s." % source)
         source_text: str | None = "\n%s\n" % body
     else:

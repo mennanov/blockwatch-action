@@ -187,34 +187,46 @@ class FakeGitHubApi:
             def _headers(self) -> dict[str, str]:
                 return {key.lower(): value for key, value in self.headers.items()}
 
+            def _comment_id(self) -> int:
+                return int(self.path.rstrip("/").rpartition("/")[2])
+
+            def _record_comment_write(self, method: str, data: JsonObject | None = None) -> bool:
+                parent.comment_requests.append((method, self.path, self._headers(), data))
+                if parent.comment_write_status >= 400:
+                    self._send_json(parent.comment_write_status, b'{"message":"forbidden"}')
+                    return False
+                return True
+
+            def _handle_comments_get(self, parsed: urllib.parse.ParseResult) -> None:
+                parent.comment_requests.append(("GET", self.path, self._headers(), None))
+                if parent.comments_status >= 400:
+                    self._send_json(parent.comments_status, b'{"message":"error"}')
+                    return
+                query = urllib.parse.parse_qs(parsed.query)
+                page = int(query.get("page", ["1"])[0])
+                page_size = parent.comments_page_size or len(parent.comments) or 100
+                start = (page - 1) * page_size
+                items = parent.comments[start : start + page_size]
+                extra: dict[str, str] = {}
+                if start + page_size < len(parent.comments):
+                    extra["Link"] = '<%s%s?page=%d>; rel="next"' % (
+                        parent.url,
+                        parsed.path,
+                        page + 1,
+                    )
+                self._send_json(
+                    parent.comments_status,
+                    json.dumps(items).encode("utf-8"),
+                    extra,
+                )
+
             def do_GET(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
-                headers = self._headers()
                 if parsed.path.endswith("/comments"):
-                    parent.comment_requests.append(("GET", self.path, headers, None))
-                    if parent.comments_status >= 400:
-                        self._send_json(parent.comments_status, b'{"message":"error"}')
-                        return
-                    query = urllib.parse.parse_qs(parsed.query)
-                    page = int(query.get("page", ["1"])[0])
-                    page_size = parent.comments_page_size or len(parent.comments) or 100
-                    start = (page - 1) * page_size
-                    items = parent.comments[start : start + page_size]
-                    extra: dict[str, str] = {}
-                    if start + page_size < len(parent.comments):
-                        extra["Link"] = '<%s%s?page=%d>; rel="next"' % (
-                            parent.url,
-                            parsed.path,
-                            page + 1,
-                        )
-                    self._send_json(
-                        parent.comments_status,
-                        json.dumps(items).encode("utf-8"),
-                        extra,
-                    )
+                    self._handle_comments_get(parsed)
                     return
 
-                parent.requests.append((self.path, headers))
+                parent.requests.append((self.path, self._headers()))
                 payload = (
                     parent.raw_body
                     if parent.raw_body is not None
@@ -223,11 +235,8 @@ class FakeGitHubApi:
                 self._send_json(parent.status, payload)
 
             def do_POST(self) -> None:
-                headers = self._headers()
                 data = self._read_json_body()
-                parent.comment_requests.append(("POST", self.path, headers, data))
-                if parent.comment_write_status >= 400:
-                    self._send_json(parent.comment_write_status, b'{"message":"forbidden"}')
+                if not self._record_comment_write("POST", data):
                     return
                 comment: JsonObject = {
                     "id": parent._next_id,
@@ -238,13 +247,10 @@ class FakeGitHubApi:
                 self._send_json(201, json.dumps(comment).encode("utf-8"))
 
             def do_PATCH(self) -> None:
-                headers = self._headers()
                 data = self._read_json_body()
-                parent.comment_requests.append(("PATCH", self.path, headers, data))
-                if parent.comment_write_status >= 400:
-                    self._send_json(parent.comment_write_status, b'{"message":"forbidden"}')
+                if not self._record_comment_write("PATCH", data):
                     return
-                comment_id = int(self.path.rstrip("/").rpartition("/")[2])
+                comment_id = self._comment_id()
                 for item in parent.comments:
                     if item.get("id") == comment_id:
                         item["body"] = str((data or {}).get("body") or "")
@@ -253,12 +259,9 @@ class FakeGitHubApi:
                 self._send_json(404, b'{"message":"not found"}')
 
             def do_DELETE(self) -> None:
-                headers = self._headers()
-                parent.comment_requests.append(("DELETE", self.path, headers, None))
-                if parent.comment_write_status >= 400:
-                    self._send_json(parent.comment_write_status, b'{"message":"forbidden"}')
+                if not self._record_comment_write("DELETE"):
                     return
-                comment_id = int(self.path.rstrip("/").rpartition("/")[2])
+                comment_id = self._comment_id()
                 before = len(parent.comments)
                 parent.comments = [item for item in parent.comments if item.get("id") != comment_id]
                 code = 204 if len(parent.comments) < before else 404
