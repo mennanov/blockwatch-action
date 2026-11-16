@@ -148,7 +148,7 @@ def resolve_pull_request_target(payload: JsonObject) -> tuple[PullRequestTarget 
         return None, "unsupported API URL scheme"
 
     return (
-        PullRequestTarget(api_url=api_url, repository=repository, number=str(number), token=token),
+        PullRequestTarget(api_url=api_url, repository=repository, number=number, token=token),
         "",
     )
 
