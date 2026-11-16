@@ -216,8 +216,9 @@ class PullRequestApiTest(ActionTestCase):
             self.assertEqual(len(api.comments), 1)
             first_body = str(api.comments[0]["body"])
             self.assertTrue(first_body.startswith(marker))
-            self.assertIn("> [!WARNING]", first_body)
+            self.assertIn("> [!WARNING]\n> blockwatch: 1 suppressed violation(s)", first_body)
             self.assertNotIn("suppression directive(s)", first_body)
+            self.assertNotIn("### ", first_body)
             self.assertIn("| Location | Message | Source | Suppression directive |", first_body)
             violation = created.diagnostics["docs/a.md"][0]
             line_num = violation["range"]["start"]["line"]

@@ -444,12 +444,7 @@ def render_pr_comment(violations: list[Violation], links: PullRequestLinks) -> s
             COMMENT_MARKER,
             "",
             "> [!WARNING]",
-            (
-                "> The following violation(s) were suppressed via commit messages "
-                "or the pull request description."
-            ),
-            "",
-            "### blockwatch: %d suppressed violation(s)" % len(suppressed),
+            "> blockwatch: %d suppressed violation(s)" % len(suppressed),
             "",
             "| Location | Message | Source | Suppression directive |",
             "| --- | --- | --- | --- |",
