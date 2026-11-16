@@ -9,5 +9,5 @@ target = 'scripts/run.py'
 affects = 'README.md:quick-start'
 
 [[block]]
-target = 'scripts/blockwatch_action/*.py'
+target = 'scripts/action/*.py'
 affects = 'README.md:quick-start'

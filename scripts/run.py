@@ -9,14 +9,14 @@ environment, so there is no expression expansion to inject into either.
 
 Inputs arrive as INPUT_* variables, the event as GITHUB_EVENT_PATH, and nothing
 is read from the command line. Implementation modules live under
-`scripts/blockwatch_action/`.
+`scripts/action/`.
 """
 
 from __future__ import annotations
 
 import sys
 
-from blockwatch_action.config import (
+from action.config import (
     RUN_FAILED,
     ActionConfig,
     Failure,
@@ -25,9 +25,9 @@ from blockwatch_action.config import (
     event_payload,
     read_config,
 )
-from blockwatch_action.diagnostics import classify_violations, parse_diagnostics
-from blockwatch_action.github_api import pull_request_links, sync_pull_request_comment
-from blockwatch_action.reporting import (
+from action.diagnostics import classify_violations, parse_diagnostics
+from action.github_api import pull_request_links, sync_pull_request_comment
+from action.reporting import (
     COMMENT_MARKER,
     emit_annotations,
     emit_run_error,
@@ -36,13 +36,13 @@ from blockwatch_action.reporting import (
     write_outputs,
     write_summary,
 )
-from blockwatch_action.runner import (
+from action.runner import (
     blockwatch_args,
     diff_command,
     push_base,
     run_blockwatch,
 )
-from blockwatch_action.suppressions import (
+from action.suppressions import (
     SuppressionCollection,
     SuppressionDirective,
     write_suppression_file,

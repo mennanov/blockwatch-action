@@ -6,10 +6,10 @@ import html
 import json
 from dataclasses import dataclass
 
-from blockwatch_action.config import RUN_FAILED, SUPPRESSION_SOURCES, JsonObject, env
-from blockwatch_action.diagnostics import Violation
-from blockwatch_action.github_api import PullRequestLinks
-from blockwatch_action.suppressions import SuppressionDirective
+from action.config import RUN_FAILED, SUPPRESSION_SOURCES, JsonObject, env
+from action.diagnostics import Violation
+from action.github_api import PullRequestLinks
+from action.suppressions import SuppressionDirective
 
 # GitHub renders a limited number of annotations per step and drops the rest
 # without saying so, so the step stops at the caller's limit and reports the

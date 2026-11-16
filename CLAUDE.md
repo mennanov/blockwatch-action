@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A single **composite GitHub Action** that installs and runs the [`blockwatch`](https://github.com/mennanov/blockwatch) Rust CLI against a repository's git diff. There is no build step. `action.yml` declares the inputs and the six install steps; the seventh step's logic — argument building, suppression sources, the diff, and the reporting — enters through [`scripts/run.py`](scripts/run.py) backed by focused modules in [`scripts/blockwatch_action/`](scripts/blockwatch_action/), which is where almost every runtime change belongs. Everything else (README, test workflow, dependabot) supports those runtime files.
+A single **composite GitHub Action** that installs and runs the [`blockwatch`](https://github.com/mennanov/blockwatch) Rust CLI against a repository's git diff. There is no build step. `action.yml` declares the inputs and the six install steps; the seventh step's logic — argument building, suppression sources, the diff, and the reporting — enters through [`scripts/run.py`](scripts/run.py) backed by focused modules in [`scripts/action/`](scripts/action/), which is where almost every runtime change belongs. Everything else (README, test workflow, dependabot) supports those runtime files.
 
 ## Commands
 
@@ -378,7 +378,7 @@ The mechanics, in the order they bite:
   directives (`commit_suppressions`, `description_suppressions`)** regardless of `annotations`,
   `summary`, or `comment` settings (using single-line `json.dumps` bounded at 512 KiB).
 - **Sticky PR suppression comments (`comment`, default `true`)** are synced by
-  [`scripts/blockwatch_action/github_api.py`](scripts/blockwatch_action/github_api.py) on `pull_request`
+  [`scripts/action/github_api.py`](scripts/action/github_api.py) on `pull_request`
   runs so actually suppressed violations are visible on the PR Overview timeline too (marker
   `<!-- blockwatch-action:suppressions -->`, single table with Location code link, Message, Source commit diff
   link, and Suppression directive, capped at 50 rows and 60,000 characters). Unchanged comments skip `PATCH`,
@@ -447,7 +447,7 @@ only creates the version tag reaches nobody.
 
 - "Checks" and "Local Test" both passed on it.
 - It is ahead of the latest version tag, so a late CI run can't move `v1` back.
-- `action.yml`, `scripts/run.py`, or `scripts/blockwatch_action/` differs from the latest version
+- `action.yml`, `scripts/run.py`, or `scripts/action/` differs from the latest version
   tag. Nothing else reaches consumers.
 
 Each run that tags nothing says why in a notice. To retry a release, run the workflow by hand from

@@ -8,7 +8,7 @@ import sys
 import tempfile
 from typing import IO
 
-from blockwatch_action.config import Failure, JsonObject, env, scalar, split_list
+from action.config import Failure, JsonObject, env, scalar, split_list
 
 ZERO_SHA: str = "0" * 40
 

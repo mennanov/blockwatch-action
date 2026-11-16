@@ -76,7 +76,7 @@ jobs:
           # Consumers run only the action definition and scripts/ runtime code.
           # Changes to the README, tests, or workflows ship nothing new. This
           # also stops a second run for a commit that is already the latest release.
-          if git diff --quiet "$latest" "$SHA" -- action.yml scripts/run.py scripts/blockwatch_action; then
+          if git diff --quiet "$latest" "$SHA" -- action.yml scripts/run.py scripts/action; then
             echo "::notice::No release: action runtime files are the same as in $latest."
             exit 0
           fi

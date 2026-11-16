@@ -11,7 +11,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from blockwatch_action.config import JsonObject, env, event_pull_request
+from action.config import JsonObject, env, event_pull_request
 
 API_TIMEOUT_SECONDS: int = 30
 MAX_COMMENT_PAGES: int = 20

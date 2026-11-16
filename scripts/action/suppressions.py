@@ -8,8 +8,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from blockwatch_action.config import JsonObject, env, event_pull_request
-from blockwatch_action.github_api import fetch_pull_request_body
+from action.config import JsonObject, env, event_pull_request
+from action.github_api import fetch_pull_request_body
 
 # The address prefix blockwatch reads out of commit messages and descriptions.
 # Matched here only to name them in the log; blockwatch decides what they do.

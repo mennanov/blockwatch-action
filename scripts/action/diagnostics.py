@@ -7,8 +7,8 @@ import posixpath
 from dataclasses import dataclass
 from typing import Iterator
 
-from blockwatch_action.config import SUPPRESSION_SOURCES, JsonObject
-from blockwatch_action.suppressions import SuppressionDirective
+from action.config import SUPPRESSION_SOURCES, JsonObject
+from action.suppressions import SuppressionDirective
 
 
 @dataclass
