@@ -4,48 +4,50 @@ GitHub Action that runs the [blockwatch](https://github.com/mennanov/blockwatch)
 
 ## Quick start
 
-<!-- <block name="quick-start" line-pattern-forbidden="uses:\s+mennanov/blockwatch-action@v\d+(\s|$)"> -->
+<!-- <block name="quick-start" same-as="docs/configuration.md:scheduled-example,docs/suppressions.md:suppress-from-example,docs/suppressions.md:disable-commit-pr-suppress" same-as-pattern="uses:\s+mennanov/blockwatch-action@(?P<value>\S+)" line-pattern-forbidden="uses:\s+mennanov/blockwatch-action@v\d+(\s|$)"> -->
 ```yaml
 on: [push, pull_request]
 
 permissions:
-  contents: read
-  pull-requests: write
+  contents: read       # Read repository files and git history
+  pull-requests: write # Optional: post/update sticky PR suppression comments
 
 jobs:
   blockwatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: mennanov/blockwatch-action@v1.2.0
+      - uses: mennanov/blockwatch-action@v1.2.1
 ```
 <!-- </block> -->
 
-By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional. `pull-requests: write` allows the action to post or update a sticky pull request comment when violations are suppressed via commit messages or the PR description (if omitted or running from a fork, the comment is skipped without failing). Pin the action to a specific release tag (as above) or a full commit SHA rather than the moving `@v1` tag; see [What a commit SHA pin covers](#known-limitations).
+Checks all blocks against the git diff (using `blockwatch.toml` if present); all inputs are optional.
 
+<!-- <block name="inputs" same-as="action.yml:action-inputs" same-as-format="identifier" same-as-pattern="^(?:## |\| `)(?P<value>[A-Za-z0-9_-]+)"> -->
 ## Inputs
 
 | Input | Default | Description |
 |---|---|---|
-| `only_changed` | `"false"` | Check only blocks modified in the diff. See [Diff checking and scope](#diff-checking-and-scope) |
+| `only_changed` | `"false"` | Check only blocks modified in the diff. See [Diff checking and scope](docs/configuration.md#diff-checking-and-scope) |
 | `globs` | | Files, directories or patterns to check (e.g. `"src,**/*.md"`) |
 | `ignore` | | File patterns to skip (e.g. `"target/**,dist/**"`) |
-| `config` | | Config file to read instead of `blockwatch.toml`. See [Config file](#config-file) |
+| `config` | | Config file to read instead of `blockwatch.toml`. See [Config file](docs/configuration.md#config-file) |
 | `suppress` | | Violations to report without failing the run (e.g. `"docs/cli.md:cli-docs:keep-sorted"`) |
-| `suppress_from` | | Files containing suppression addresses. See [Suppressing violations](#suppressing-violations) |
-| `suppress_from_commits` | `"true"` | Read suppressions from the messages of the commits in the pull request or push. See [Choosing who can suppress](#choosing-who-can-suppress) |
+| `suppress_from` | | Files containing suppression addresses. See [Suppressing violations](docs/suppressions.md) |
+| `suppress_from_commits` | `"true"` | Read suppressions from the messages of the commits in the pull request or push. See [Choosing who can suppress](docs/suppressions.md#choosing-who-can-suppress) |
 | `suppress_from_description` | `"true"` | Read suppressions from a pull request description |
 | `enable` | | Comma-separated validators to run (e.g. `"keep-sorted,keep-unique"`) |
 | `disable` | | Comma-separated validators to skip (cannot be used with `enable`) |
-| `only_blocks` | | Named blocks to check, and no others, as `FILE:BLOCK_NAME` (e.g. `"docs/cli.md:cli-docs"`). See [Selecting blocks](#selecting-blocks) |
+| `only_blocks` | | Named blocks to check, and no others, as `FILE:BLOCK_NAME` (e.g. `"docs/cli.md:cli-docs"`). See [Selecting blocks](docs/configuration.md#selecting-blocks) |
 | `skip_blocks` | | Named blocks to leave unchecked (cannot be used with `only_blocks`) |
 | `extensions` | | Map an extension or a whole file name to a supported one, e.g. `"cu=cpp,Earthfile=dockerfile"` |
 | `verbosity` | `"summary"` | Output verbosity: `"none"`, `"summary"` (counts), or `"full"` (JSON) |
-| `format` | `"json"` | Output format: `"json"` or `"sarif"` (SARIF 2.1.0) |
-| `annotations` | `"true"` | Report violations and commit/PR suppression directives as GitHub annotations. See [Annotations](#annotations) |
+| `format` | `"json"` | Output format: `"json"` or `"sarif"` ([SARIF 2.1.0](docs/reporting.md#sarif-output)) |
+| `annotations` | `"true"` | Report violations and commit/PR suppression directives as GitHub annotations. See [Annotations](docs/reporting.md#annotations) |
 | `annotations_limit` | `50` | How many violation annotations to emit at most |
 | `summary` | `"true"` | Write violations and commit/PR suppression directives to the job summary as tables |
 | `comment` | `"true"` | Post or update a sticky PR comment when commit/PR suppressions are found (needs `pull-requests: write`) |
 | `diff_pathspec` | | Additional git diff pathspecs (e.g. `":(exclude).github/"`) |
+<!-- </block> -->
 
 List inputs accept comma-separated strings or multi-line YAML:
 
@@ -55,6 +57,7 @@ ignore: |
   dist/**
 ```
 
+<!-- <block name="outputs" same-as="action.yml:action-outputs" same-as-format="identifier" same-as-pattern="^(?:## |\| `)(?P<value>[A-Za-z0-9_-]+)"> -->
 ## Outputs
 
 | Output | Description |
@@ -62,222 +65,19 @@ ignore: |
 | `commit_suppressions` | JSON array of entries found in commit messages (`commit`, `subject`, `line`, `address`, `applied`) |
 | `description_suppressions` | JSON array of entries found in the PR description (`line`, `address`, `applied`) |
 | `suppressions_truncated` | `"true"` when either JSON output exceeded 512 KiB and was truncated, otherwise `"false"` |
+<!-- </block> -->
 
-Outputs are always populated (including when `annotations: "false"` and `summary: "false"`, or when the step fails), so downstream steps with `if: always()` can post a PR comment, apply a label, or notify a channel when `steps.<id>.outputs.commit_suppressions != '[]' || steps.<id>.outputs.description_suppressions != '[]'` (check `suppressions_truncated == 'true'` before treating the list as complete).
+Outputs are always populated, even when reporting is disabled or the step fails, so downstream steps with `if: always()` can inspect them.
 
-## Diff checking and scope
+## Documentation
 
-On `push` and `pull_request` events, the action generates a git diff and feeds it to blockwatch:
+<!-- <block name="docs-index" same-as-paths="docs/*.md" same-as-pattern="(?P<value>docs/[^)\s]+\.md)"> -->
+- [Configuration, diff scope, and block selection](docs/configuration.md) — `only_changed`, `globs`/`ignore`/`diff_pathspec`, `blockwatch.toml` precedence, and `only_blocks`/`skip_blocks`
+- [Reporting, annotations, PR comments, and SARIF](docs/reporting.md) — verbosity, annotation severity and limits, job summary tables, sticky PR comments, and SARIF caveats
+- [Runner requirements and supply-chain security](docs/runners-and-security.md) — self-hosted runner prerequisites and what a commit SHA pin covers
+- [Suppressing violations and trust controls](docs/suppressions.md) — suppression syntax, `suppress`/`suppress_from`/commit/PR sources, and restricting who can suppress
+<!-- </block> -->
 
-- **Default (`only_changed: "false"`)**: Scans all blocks across the repository, using the diff to flag modified blocks. This allows cross-block validators like `affects` to verify that related blocks stay in sync.
-- **`only_changed: "true"`**: Scans only the blocks touched by the diff.
+## Contributing
 
-`globs` and `ignore` filter which files are scanned. Each entry in `globs` has to select at least one file to check, or the step fails; with `only_changed: "true"` the file need not be one the diff touches. `diff_pathspec` only filters the diff itself. Hidden directories (like `.github/`) are scanned; only VCS directories (`.git`, `.hg`, `.jj`, `.svn`) and paths ignored by `.gitignore` or `ignore` are skipped.
-
-Events without a diff (e.g. `workflow_dispatch`, `schedule`) scan the full repository, and `only_changed` is ignored.
-
-Which diff is used:
-
-- **Pull request**: everything the pull request changes, against the point where it left its base branch.
-- **Push**: everything since the branch's previous tip.
-- **Push that creates a branch, or force-push**: only the head commit, against its first parent. A force-push replaces the previous tip, which then exists on no branch and is not fetched.
-
-A diff that comes out empty (empty commits, changes that cancel out, or a `diff_pathspec` that excludes everything) is not an error: it means no block changed. Every block is still checked, or none with `only_changed: "true"`. A diff git fails to produce fails the step with git's own error.
-
-## Config file
-
-blockwatch reads the settings a project always uses from `blockwatch.toml` at the repository root, so the action, a pre-commit hook and local runs share one copy. The action picks it up with no input. Set `config` to read another file instead, relative to the repository root. See the [blockwatch documentation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#config-file) for the keys.
-
-The inputs combine with the file the way blockwatch's flags do:
-
-| Input | With the file's key |
-|---|---|
-| `ignore` | Both lists apply |
-| `extensions` | Both apply; the input wins for the same extension |
-| `enable`, `disable` | The input replaces the file's selection |
-| `only_blocks`, `skip_blocks` | The input replaces the file's `only-blocks` or `skip-blocks` |
-
-So `disable: "line-count"` turns a validator the file disables back on. List it in the input too to keep it off.
-
-The file can also declare blocks around values in files that cannot hold a comment, such as a version in `package.json`. Their violations are reported, and annotated, on that file.
-
-## Selecting blocks
-
-`only_blocks` checks only the blocks it lists, and `skip_blocks` every block but those. Each entry is the address of one named block, `FILE:BLOCK_NAME`: the start of the suppression address an [annotation](#annotations) shows. An unnamed block has no address, so to leave out a whole file use `globs` or `ignore`.
-
-- An address that matches no block fails the step, so a renamed block can't quietly turn its checks on or off. A block that `globs`, `ignore` or `only_changed` leaves out of the run still counts as a match.
-- A skipped block still exists: `affects` and `same-as` in other blocks can still refer to it.
-- `only_blocks` and `skip_blocks` can't be combined. Either one replaces the `only-blocks` or `skip-blocks` list of [`blockwatch.toml`](#config-file).
-
-So a block that needs the network can be skipped for every run in `blockwatch.toml`:
-
-```toml
-skip-blocks = ['src/models.rs:latest-model']
-```
-
-and checked on its own by a scheduled workflow:
-
-```yaml
-on:
-  schedule:
-    - cron: "0 6 * * 1"
-
-jobs:
-  blockwatch:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: mennanov/blockwatch-action@v1
-        with:
-          only_blocks: "src/models.rs:latest-model"
-```
-
-## Suppressing violations
-
-Suppressed violations are still reported in the output, but will not fail the step.
-
-Addresses follow the syntax:
-```
-FILE[:BLOCK_NAME[:VALIDATOR[:HASH]]]
-```
-Shorter addresses match more broadly. For example, `path/to/file.md` suppresses all violations in that file. You can find exact violation addresses in previous run logs. See the [blockwatch documentation](https://github.com/mennanov/blockwatch/blob/main/docs/cli.md#suppressing-a-violation) for syntax details.
-
-Suppressions can come from three sources, which all combine:
-
-### 1. Action input (`suppress`)
-```yaml
-suppress: |
-  docs/cli.md:cli-docs:keep-sorted
-  legacy/generated.py
-```
-
-### 2. Commit messages or PR descriptions
-Add a line to a commit message or PR description:
-```text
-blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
-```
-The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected directives are printed in the job log, written to the job summary, exported via [outputs](#outputs), and surfaced as GitHub annotations (`::warning` when `suppress_from_commits` or, on a pull request, `suppress_from_description` is `"true"`, or `::notice` when neither source applies). When `comment: "true"` and `pull-requests: write` is granted, any actually suppressed violations are also listed in a sticky comment on the PR page (linking to the flagged code and commit diff, and removed again once none remain).
-
-The description is read from the API when the run starts, not from the event that triggered it. The two differ after an edit: a re-run replays the original event, so a description-based suppression would otherwise not take effect until the next push. Reading it live means **edit the description, press Re-run, and the violation stops blocking**. The job log names which source was used; without a usable `GITHUB_TOKEN` the action falls back to the event payload.
-
-### 3. External files (`suppress_from`)
-```yaml
-- uses: mennanov/blockwatch-action@v1
-  with:
-    suppress_from: "ci/known-violations.txt"
-```
-Files use the same format: lines starting with `blockwatch-suppress: ADDRESS` are parsed, and all other lines are ignored.
-
-### Choosing who can suppress
-
-By default, whoever writes a commit or a pull request description can suppress a violation, including one their own change introduces. Where that is too much trust, such as for outside contributors or automated agents, turn those sources off:
-
-```yaml
-- uses: mennanov/blockwatch-action@v1
-  with:
-    suppress_from_commits: "false"
-    suppress_from_description: "false"
-```
-
-Each input works alone. `suppress_from_description: "false"` is the narrower choice: it stops a suppression arriving after a review without a new commit, and leaves commit messages working. With both off, a `blockwatch-suppress:` line can't change the result or fail the step: ignored lines in commit messages or the event payload's PR body are listed in the job log and job summary, emitted as `::notice` annotations (or `::warning` if the other source is enabled on a pull request), and annotations point to the `suppress` input.
-
-To trust branches in your own repository but not forks:
-
-```yaml
-suppress_from_commits: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-suppress_from_description: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-```
-
-This does not separate people from agents that push to a branch in the repository. Those need the inputs set to `"false"`.
-
-These inputs move a suppression into the diff, where a reviewer sees it. They do not stop a pull request from changing what is checked: it can still edit the workflow, `blockwatch.toml`, a `suppress_from` file or the block tags themselves. To keep those under control, require review from a code owner on them.
-
-## Verbosity and reports
-
-By default (`verbosity: "summary"`), blockwatch prints a one-line count to stdout:
-
-```text
-blockwatch: mode=all+diff, 240/240 files, 61 blocks (3 unchecked), 73 checks, 0 violations
-```
-
-Use `verbosity: "full"` for JSON output, or `"none"` to silence the summary.
-
-## Annotations
-
-Violations are reported as GitHub annotations as well as in the log, so each one appears
-on the line it refers to in the pull request, and in the check run for the job:
-
-```text
-::error file=docs/cli.md,line=12,endLine=12,col=1,endColumn=40,title=blockwatch: keep-sorted::Block docs/cli.md:cli-docs defined at line 9 has an out-of-order line 12 (asc)
-Suppress with: blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted:35385fe8
-```
-
-- A violation that fails the run is an **error**; a violation [suppressed](#suppressing-violations)
-  via commit messages or a pull request description is elevated to a **warning** (alongside
-  a summary annotation naming the commit/PR directive); a violation suppressed only via
-  `suppress` or `suppress_from` stays a **notice**, because it is already configured in the
-  workflow or repository.
-- When `blockwatch-suppress:` lines appear in commit messages or the pull request description,
-  the action emits an annotation per source even when no violation matched — as a **warning**
-  when `suppress_from_commits` or (on a pull request) `suppress_from_description` is `"true"`,
-  or as a **notice** when neither applies.
-- Blocks that are named carry their suppression address into the annotation, ready to
-  copy into a commit message or the `suppress` input. When no `blockwatch-suppress:` line
-  can reach the run, the annotation offers the address for the `suppress` input alone.
-- A run blockwatch cannot finish (a malformed tag, a missing config or `suppress_from` file,
-  an `only_blocks` address that matches no block) checks nothing and reports no violation.
-  Its error becomes one **error** annotation of its own, attached to no file.
-- The same violations and any commit/PR-description suppression directives are written to the
-  **job summary** as tables. GitHub caps how many annotations it renders but does not cap the
-  summary, so the table is where a long list stays complete.
-- The JSON (or SARIF) diagnostics stay in the job log either way.
-
-Both formats are read, so `format` and `annotations` are independent. Set
-`annotations: "false"` and `summary: "false"` for the log-only output of earlier versions.
-Reading the diagnostics needs Python 3, which every GitHub-hosted runner already has.
-
-## SARIF output
-
-Set `format: "sarif"` to output a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log to stderr.
-
-> **Note:** The action streams SARIF directly to the job log rather than saving it to a file, so it cannot be picked up by `github/codeql-action/upload-sarif`. If you need to upload a SARIF file to GitHub Code Scanning, invoke `blockwatch` directly in a custom step:
-> ```bash
-> blockwatch --format sarif 2> results.sarif
-> ```
-
-## Known limitations
-
-- **`diff_pathspec` does not exclude files from scanning**: It only shapes the diff. In default mode (`only_changed: "false"`), use `ignore` to exclude files from being scanned.
-- **PR author suppressions**: By default, anyone who can open a PR or push a commit can suppress violations via `blockwatch-suppress:` lines. Because the description is read live, an edit takes effect on the next run or re-run without a new commit — so a suppression can appear after a review, leaving the approval intact. The job log lists every address that was applied, and where the description came from. [`suppress_from_commits` and `suppress_from_description`](#choosing-who-can-suppress) turn these sources off.
-- **Sticky PR comment permissions and fork PRs**: The built-in PR suppression comment requires `pull-requests: write` permission (shown in [Quick start](#quick-start)). On workflows with `pull-requests: read` or `pull_request` runs from public forks (where GitHub restricts `GITHUB_TOKEN` to read-only), posting the comment is skipped cleanly with a log note while annotations, the job summary, and outputs still run. Set `comment: "false"` to turn off the built-in comment altogether.
-- **Malformed suppression syntax**: A line starting with `blockwatch-suppress:` with invalid address syntax, or with no address at all (such as a placeholder left in a pull request template), will fail the step, unless its source is turned off.
-- **Initial push on new branch, and force-pushes**: GitHub provides no previous base commit for a newly pushed branch, and the one a force-push replaced is no longer fetched, so only the head commit is diffed against its first parent, and only its message is read for suppressions. Earlier commits in that push are checked once a PR is opened.
-- **Annotations appear inline only on changed lines**: GitHub renders an annotation in
-  the *Files changed* tab only where the pull request touches that line. In the default
-  mode (`only_changed: "false"`) the whole repository is checked, so a violation in a file
-  the pull request never touched is reported in the check run and the job summary, but has
-  no line in the diff to appear on.
-- **Annotations are capped**: GitHub renders a limited number of annotations per step and
-  drops the rest without saying so, so the action emits at most `annotations_limit` (50 by
-  default) and reports how many it left out. The job summary lists up to 1000 of them.
-- **Events without diffs**: `workflow_dispatch` and `schedule` scan the full repository without diff context, so validators that depend on knowing what changed (such as `affects`) cannot check for simultaneous updates.
-- **What a commit SHA pin covers**: Every action this one calls is pinned by commit SHA, so a SHA pin here fixes all the action code that runs and the `blockwatch` version. On a cache miss the `blockwatch` archive is downloaded from its GitHub Release and must carry a valid signature from the key in that version's crate, or the install fails, so only a binary the blockwatch project signed can be installed. Three gaps remain: the signature fixes who signed the binary, not its exact bytes; the `cargo-binstall` executable is downloaded by version and not checked; and a binary restored from the cache runs without a check.
-
-## Runner requirements
-
-GitHub-hosted runners (`ubuntu-latest`, `macos-latest`, `windows-latest`) work out of the box. Prebuilt binaries are installed with `cargo-binstall` (no Rust toolchain needed).
-
-Self-hosted runners require:
-- **Actions Runner 2.327.1+ and glibc 2.28+** (Node 24 required for checkout and cache actions; Alpine, CentOS 7, and Ubuntu 18.04 are not supported). On ARM64 Linux the prebuilt blockwatch binary needs **glibc 2.30+**, which rules out RHEL 8 and Debian 10 there
-- **git 2.18+**
-- **bash** (Git Bash on Windows)
-- **curl**, plus **tar** (Linux) or **unzip** (macOS/Windows)
-- **Python 3.7+**, as `python3` or `python` on `PATH` — the action's logic runs there
-- Network access to `github.com` and `crates.io`
-- Writable `CARGO_HOME` or `CARGO_INSTALL_ROOT`
-
-## Running tests locally
-
-```shell
-act workflow_dispatch -W .github/workflows/local-test.yml
-python3 -m unittest discover -s scripts -v
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for running tests locally and pre-commit setup.

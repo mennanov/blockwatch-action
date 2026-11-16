@@ -4,6 +4,44 @@
 target = 'action.yml'
 affects = 'README.md:quick-start'
 
+# blockwatch trims indentation before matching same-as-pattern, so this matches
+# bare `key:` lines and assumes nested keys (description, required, default,
+# value) keep a value or block-scalar marker (`|`/`>`) on the same line. The
+# outer `inputs:` / `outputs:` keys pair with `## Inputs` / `## Outputs` via
+# `identifier` format.
+[[block]]
+target = 'action.yml#/inputs'
+name = 'action-inputs'
+same-as = 'README.md:inputs'
+same-as-format = 'identifier'
+same-as-pattern = '^(?P<value>[a-z0-9_-]+):$'
+
+[[block]]
+target = 'action.yml#/inputs/annotations_limit/default'
+name = 'annotations-limit-default'
+same-as = [
+  'docs/reporting.md:annotations-limit',
+  'scripts/action/config.py:config-annotations-limit-default',
+  'README.md:readme-annotations-limit',
+]
+
+[[block]]
+target = 'action.yml#/outputs'
+name = 'action-outputs'
+same-as = 'README.md:outputs'
+same-as-format = 'identifier'
+same-as-pattern = '^(?P<value>[a-z0-9_-]+):$'
+
+[[block]]
+target = 'README.md'
+target-pattern = '^\| `annotations_limit` \| `(?P<value>\d+)` \|'
+name = 'readme-annotations-limit'
+same-as = [
+  'action.yml:annotations-limit-default',
+  'scripts/action/config.py:config-annotations-limit-default',
+  'docs/reporting.md:annotations-limit',
+]
+
 [[block]]
 target = 'scripts/run.py'
 affects = 'README.md:quick-start'
@@ -11,3 +49,19 @@ affects = 'README.md:quick-start'
 [[block]]
 target = 'scripts/action/*.py'
 affects = 'README.md:quick-start'
+
+[[block]]
+target = 'scripts/action/config.py'
+target-pattern = '^DEFAULT_ANNOTATIONS_LIMIT:\s*int\s*=\s*(?P<value>\d+)'
+name = 'config-annotations-limit-default'
+same-as = [
+  'action.yml:annotations-limit-default',
+  'docs/reporting.md:annotations-limit',
+  'README.md:readme-annotations-limit',
+]
+
+[[block]]
+target = 'scripts/action/reporting.py'
+target-pattern = '^SUMMARY_ROW_LIMIT:\s*int\s*=\s*(?P<value>\d+)'
+name = 'summary-row-limit'
+same-as = 'docs/reporting.md:summary-row-limit'

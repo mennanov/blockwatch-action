@@ -24,6 +24,7 @@ SUPPRESSION_SOURCES: tuple[str, str] = (COMMIT_SOURCE, DESCRIPTION_SOURCE)
 # What blockwatch exits with, since 0.11.0, when the run cannot finish: a bad
 # flag, config file or tag, an unreadable file. 1 means only a violation.
 RUN_FAILED: int = 2
+DEFAULT_ANNOTATIONS_LIMIT: int = 50
 
 
 class Failure(Exception):
@@ -94,7 +95,7 @@ def parse_bool(name: str, value: str, default: bool = False) -> bool:
 def parse_limit(value: str) -> int:
     token = scalar(value)
     if not token:
-        return 50
+        return DEFAULT_ANNOTATIONS_LIMIT
     if not token.isdigit():
         raise Failure("annotations_limit must be a whole number, got %r" % token)
     return int(token)
