@@ -61,8 +61,9 @@ ignore: |
 |---|---|
 | `commit_suppressions` | JSON array of entries found in commit messages (`commit`, `subject`, `line`, `address`, `applied`) |
 | `description_suppressions` | JSON array of entries found in the PR description (`line`, `address`, `applied`) |
+| `suppressions_truncated` | `"true"` when either JSON output exceeded 512 KiB and was truncated, otherwise `"false"` |
 
-Outputs are always populated (including when `annotations: "false"` and `summary: "false"`, or when the step fails), so downstream steps with `if: always()` can post a PR comment, apply a label, or notify a channel when `steps.<id>.outputs.commit_suppressions != '[]' || steps.<id>.outputs.description_suppressions != '[]'`.
+Outputs are always populated (including when `annotations: "false"` and `summary: "false"`, or when the step fails), so downstream steps with `if: always()` can post a PR comment, apply a label, or notify a channel when `steps.<id>.outputs.commit_suppressions != '[]' || steps.<id>.outputs.description_suppressions != '[]'` (check `suppressions_truncated == 'true'` before treating the list as complete).
 
 ## Diff checking and scope
 

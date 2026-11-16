@@ -31,7 +31,7 @@ class SuppressionDiscoveryTest(ActionTestCase):
         """A blockwatch-suppress line in a PR description suppresses the violation and warns."""
         self.break_fruit()
 
-        result = self.run_pull_request("blockwatch-suppress: docs/a.md")
+        result = self.run_pull_request("blockwatch-suppress: docs/a.md", INPUT_COMMENT="false")
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.levels, ["warning", "warning"])
@@ -41,7 +41,10 @@ class SuppressionDiscoveryTest(ActionTestCase):
         """When both commit and PR directives match one violation, both sources are credited."""
         self.break_fruit("suppress in commit\n\nblockwatch-suppress: docs/a.md:fruit\n")
 
-        result = self.run_pull_request("Also in PR description\n\nblockwatch-suppress: docs/a.md")
+        result = self.run_pull_request(
+            "Also in PR description\n\nblockwatch-suppress: docs/a.md",
+            INPUT_COMMENT="false",
+        )
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.levels, ["warning", "warning", "warning"])
@@ -142,7 +145,11 @@ class SuppressionDiscoveryTest(ActionTestCase):
         self.assertNotIn("(suppressed via", result.summary)
         self.assertEqual(
             result.outputs,
-            {"commit_suppressions": "[]", "description_suppressions": "[]"},
+            {
+                "commit_suppressions": "[]",
+                "description_suppressions": "[]",
+                "suppressions_truncated": "false",
+            },
         )
 
     def test_mixed_commit_and_workflow_suppressions_report_separate_sources(self) -> None:
@@ -286,7 +293,10 @@ class SuppressionPolicyTest(ActionTestCase):
 
         with self.subTest("commits disabled, description enabled"):
             desc_only = self.run_pull_request(
-                body, INPUT_SUPPRESS_FROM_COMMITS="false", INPUT_SUPPRESS_FROM_DESCRIPTION="true"
+                body,
+                INPUT_SUPPRESS_FROM_COMMITS="false",
+                INPUT_SUPPRESS_FROM_DESCRIPTION="true",
+                INPUT_COMMENT="false",
             )
             self.assertEqual(desc_only.exit_code, 1)
             self.assertEqual(desc_only.levels, ["warning", "warning", "error", "warning"])
@@ -353,7 +363,7 @@ class SuppressionReportingTest(ActionTestCase):
         sha = self.break_both("break both\n\nblockwatch-suppress: docs/a.md:fruit\n")
         body = "Context\n\nblockwatch-suppress: docs/b.md"
 
-        result = self.run_pull_request(body)
+        result = self.run_pull_request(body, INPUT_COMMENT="false")
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.levels, ["warning", "warning", "warning", "warning"])
@@ -376,7 +386,11 @@ class SuppressionReportingTest(ActionTestCase):
         self.assertIn("(suppressed via commits)", result.summary)
         self.assertIn("(suppressed via description)", result.summary)
 
-        self.assertEqual(set(result.outputs), {"commit_suppressions", "description_suppressions"})
+        self.assertEqual(
+            set(result.outputs),
+            {"commit_suppressions", "description_suppressions", "suppressions_truncated"},
+        )
+        self.assertEqual(result.outputs["suppressions_truncated"], "false")
         commit_items = result.json_output("commit_suppressions")
         self.assertEqual(len(commit_items), 1)
         self.assertEqual(commit_items[0]["commit"], sha[:7])
@@ -437,6 +451,7 @@ class SuppressionReportingTest(ActionTestCase):
         self.assertIn("blockwatch: 22 suppression directive(s)", result.summary)
         self.assertNotIn("further directive(s) not listed", result.summary)
         self.assertEqual(len(result.json_output("commit_suppressions")), 22)
+        self.assertEqual(result.outputs["suppressions_truncated"], "false")
 
     def test_large_directive_lists_cap_summary_rows_and_bound_output_json(self) -> None:
         """Summaries cap at 1000 directive rows and `GITHUB_OUTPUT` JSON stays within 512 KiB."""
@@ -450,24 +465,38 @@ class SuppressionReportingTest(ActionTestCase):
         self.assertIn("_3500 further directive(s) not listed._", result.summary)
         raw_json = result.outputs["commit_suppressions"]
         self.assertLessEqual(len(raw_json.encode("utf-8")), 512 * 1024)
+        self.assertEqual(result.outputs["suppressions_truncated"], "true")
+        self.assertTrue(
+            any(
+                a.level == "warning"
+                and "commit_suppressions" in a.message
+                and "truncated" in a.message
+                for a in result.annotations
+            )
+        )
         parsed = result.json_output("commit_suppressions")
         self.assertGreater(len(parsed), 1000)
         self.assertLess(len(parsed), 4500)
 
     def test_outputs_are_written_even_when_annotations_and_summary_are_off(self) -> None:
-        """Step outputs remain populated even when both annotations and summary are disabled."""
+        """Step outputs remain populated even when annotations, summary, and comment are off."""
         self.break_fruit("suppress\n\nblockwatch-suppress: docs/a.md:fruit\n")
 
         result = self.run_pull_request(
             "blockwatch-suppress: docs/b.md",
             INPUT_ANNOTATIONS="false",
             INPUT_SUMMARY="false",
+            INPUT_COMMENT="false",
         )
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.annotations, [])
         self.assertEqual(result.summary, "")
-        self.assertEqual(set(result.outputs), {"commit_suppressions", "description_suppressions"})
+        self.assertEqual(
+            set(result.outputs),
+            {"commit_suppressions", "description_suppressions", "suppressions_truncated"},
+        )
+        self.assertEqual(result.outputs["suppressions_truncated"], "false")
         self.assertEqual(len(result.json_output("commit_suppressions")), 1)
         self.assertEqual(len(result.json_output("description_suppressions")), 1)
         self.assertIs(result.json_output("commit_suppressions")[0]["applied"], True)
@@ -489,6 +518,26 @@ class SuppressionReportingTest(ActionTestCase):
 
     def test_failed_diff_still_records_detected_attempts_in_outputs(self) -> None:
         """When git diff aborts early, detected suppression attempts still populate step outputs."""
+        self.break_fruit("break fruit\n\nblockwatch-suppress: docs/b.md\n")
+
+        result = self.run_pull_request(
+            "blockwatch-suppress: docs/a.md",
+            INPUT_DIFF_PATHSPEC=":(invalid)",
+        )
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("no diff to check", result.stderr)
+        self.assertEqual(result.annotations, [])
+        self.assertEqual(
+            set(result.outputs),
+            {"commit_suppressions", "description_suppressions", "suppressions_truncated"},
+        )
+        self.assertEqual(result.outputs["suppressions_truncated"], "false")
+        self.assertEqual(result.json_output("commit_suppressions")[0]["address"], "docs/b.md")
+        self.assertEqual(result.json_output("description_suppressions")[0]["address"], "docs/a.md")
+
+    def test_failed_git_log_aborts_and_reports_git_error(self) -> None:
+        """A failing git log aborts the run and surfaces git's stderr instead of returning empty."""
         self.break_fruit()
 
         result = self.run_pull_request(
@@ -498,25 +547,28 @@ class SuppressionReportingTest(ActionTestCase):
         )
 
         self.assertEqual(result.exit_code, 1)
-        self.assertIn("no diff to check", result.stderr)
-        self.assertEqual(result.annotations, [])
-        self.assertEqual(set(result.outputs), {"commit_suppressions", "description_suppressions"})
-        self.assertEqual(result.json_output("commit_suppressions"), [])
-        self.assertEqual(result.json_output("description_suppressions")[0]["address"], "docs/a.md")
+        self.assertIn("commit suppressions cannot be read", result.stderr)
+        self.assertIn("no-such-branch", result.stderr)
 
     def test_untrusted_text_in_directives_subjects_and_violations_is_escaped(self) -> None:
-        """Workflow command metacharacters, HTML tags, pipes, and CRs are escaped in outputs."""
-        self.write("docs/bad%0A|name.md", UNSORTED_FRUIT)
+        """Workflow command metacharacters, HTML tags, backticks, pipes, and CRs are escaped."""
+        self.write("docs/bad%0A|<img src=x>_`tick`.md", UNSORTED_FRUIT)
         self.commit("pipe | <tag> %0A\n\nblockwatch-suppress: docs/a.md | <bad>\n")
 
-        result = self.run_pull_request("blockwatch-suppress: docs/b.md | <xss>")
+        result = self.run_pull_request(
+            "blockwatch-suppress: docs/b.md | <xss>",
+            INPUT_COMMENT="false",
+        )
 
         self.assertEqual(result.exit_code, 1)
         self.assertEqual(result.levels, ["warning", "warning", "error"])
         self.assertIn("%250A", result.annotations[0].message)
-        self.assertEqual(result.annotations[2].properties["file"], "docs/bad%250A|name.md")
+        self.assertEqual(
+            result.annotations[2].properties["file"],
+            "docs/bad%250A|<img src=x>_`tick`.md",
+        )
         self.assertIn(
-            "Suppress with: blockwatch-suppress: docs/bad%250A|name.md",
+            "Suppress with: blockwatch-suppress: docs/bad%250A|<img src=x>_`tick`.md",
             result.annotations[2].message,
         )
         for expected in (
@@ -524,8 +576,8 @@ class SuppressionReportingTest(ActionTestCase):
             "&lt;tag&gt;",
             "&lt;bad&gt;",
             "&lt;xss&gt;",
-            r"docs/bad%0A\|name.md",
+            "docs/bad%0A&#124;&lt;img src=x&gt;_&#96;tick&#96;.md",
         ):
             self.assertIn(expected, result.summary)
-        for raw in ("<tag>", "<bad>", "<xss>"):
+        for raw in ("<tag>", "<bad>", "<xss>", "<img", "`tick`"):
             self.assertNotIn(raw, result.summary)

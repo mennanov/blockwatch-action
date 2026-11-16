@@ -17,7 +17,9 @@ from typing import Any, Dict
 # `dict[str, Any]` is only subscriptable from 3.9.
 JsonObject = Dict[str, Any]
 
-SUPPRESSION_SOURCES: tuple[str, str] = ("commits", "description")
+COMMIT_SOURCE: str = "commits"
+DESCRIPTION_SOURCE: str = "description"
+SUPPRESSION_SOURCES: tuple[str, str] = (COMMIT_SOURCE, DESCRIPTION_SOURCE)
 
 # What blockwatch exits with, since 0.11.0, when the run cannot finish: a bad
 # flag, config file or tag, an unreadable file. 1 means only a violation.
@@ -130,7 +132,17 @@ def event_payload() -> JsonObject:
     return payload if isinstance(payload, dict) else {}
 
 
+def escape_data(value: str) -> str:
+    """Percent-encode a workflow command's message."""
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def dict_field(obj: JsonObject, key: str) -> JsonObject:
+    """Return a nested dict field from `obj`, or `{}` if absent or not a dict."""
+    value = obj.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 def event_pull_request(payload: JsonObject) -> JsonObject:
     """Return the `pull_request` object from an event payload, or `{}` if absent."""
-    pr = payload.get("pull_request")
-    return pr if isinstance(pr, dict) else {}
+    return dict_field(payload, "pull_request")

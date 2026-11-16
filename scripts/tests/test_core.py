@@ -58,11 +58,7 @@ class CoreTest(ActionTestCase):
         """A failing git diff aborts the step before running blockwatch or scanning the tree."""
         self.break_fruit()
 
-        result = self.run_action(
-            event={"pull_request": {"number": 1}},
-            event_name="pull_request",
-            GITHUB_BASE_REF="no-such-branch",
-        )
+        result = self.run_pull_request("", INPUT_DIFF_PATHSPEC=":(invalid)")
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("no diff to check", result.stderr)

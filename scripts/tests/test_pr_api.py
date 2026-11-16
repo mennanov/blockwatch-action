@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 
 from .harness import (
@@ -97,7 +98,10 @@ class PullRequestApiTest(ActionTestCase):
 
         self.assertEqual(fallback.exit_code, 0)
         self.assertIn("the API answered HTTP 503", fallback.stdout)
-        self.assertEqual(fallback.levels, ["warning", "warning"])
+        self.assertEqual(fallback.levels, ["warning", "warning", "warning"])
+        self.assertIn(
+            "Could not read pull request suppression comments", fallback.annotations[2].message
+        )
 
     def test_null_and_non_object_api_responses_leave_description_empty(self) -> None:
         """A null body or non-object JSON API response yields an empty description."""
@@ -117,6 +121,42 @@ class PullRequestApiTest(ActionTestCase):
             )
             self.assertEqual(non_object.exit_code, 1)
             self.assertEqual(non_object.json_output("description_suppressions"), [])
+
+    def test_redirects_block_cross_origin_requests_and_allow_same_origin(self) -> None:
+        """Cross-origin API redirects are blocked before leaking `GH_TOKEN`; same-origin works."""
+        self.break_fruit()
+
+        with FakeGitHubApi(body="") as thief:
+            leaky, _ = self.run_pr_api(
+                api_body="",
+                redirects={
+                    "/repos/acme/widgets/pulls/7": thief.url + "/steal-pr",
+                    "/repos/acme/widgets/issues/7/comments": thief.url + "/steal-comments",
+                },
+                snapshot_body="blockwatch-suppress: docs/a.md",
+                number=7,
+            )
+            self.assertEqual(leaky.exit_code, 0)
+            self.assertEqual(thief.requests, [])
+            self.assertEqual(thief.comment_requests, [])
+            self.assertIn("blocked cross-origin redirect", leaky.stdout)
+            self.assertTrue(
+                any(
+                    a.level == "warning" and "blocked cross-origin redirect" in a.message
+                    for a in leaky.annotations
+                )
+            )
+
+        with FakeGitHubApi(status=200, body="blockwatch-suppress: docs/a.md") as same_origin_api:
+            same_origin_api.redirects["/repos/acme/widgets/pulls/8"] = (
+                "/repos/acme/widgets/pulls/8-target"
+            )
+            result = self.run_against_api(same_origin_api, number=8)
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn(
+                "/repos/acme/widgets/pulls/8-target",
+                [path for path, _ in same_origin_api.requests],
+            )
 
     def test_malformed_json_unreachable_endpoint_and_bad_scheme_fall_back_to_snapshot(self) -> None:
         """Malformed JSON, network errors, and non-HTTP URLs fall back cleanly to the snapshot."""
@@ -241,9 +281,11 @@ class PullRequestApiTest(ActionTestCase):
             self.assertEqual([req[0] for req in api.comment_requests], ["GET"])
             self.assertEqual(len(api.comments), 1)
 
-            # Adding a second violation suppressed by PR description updates the comment in place.
+            # Adding a second violation suppressed by PR description updates the comment in place,
+            # linking to the checked-out GITHUB_SHA commit on the base repository rather than a
+            # stale PR head commit on a fork.
             self.write("docs/b.md", UNSORTED_VEG)
-            head_sha = self.commit("break veg too")
+            checkout_sha = self.commit("break veg too")
             api.body = "blockwatch-suppress: docs/b.md\nblockwatch-suppress: docs/a.md"
             api.comment_requests.clear()
             updated = self.run_against_api(
@@ -252,7 +294,7 @@ class PullRequestApiTest(ActionTestCase):
                 pr_fields={
                     "html_url": "https://github.com/acme/widgets/pull/42",
                     "head": {
-                        "sha": head_sha,
+                        "sha": "deadbeef00000000000000000000000000000000",
                         "repo": {"html_url": "https://github.com/forker/widgets"},
                     },
                 },
@@ -269,8 +311,9 @@ class PullRequestApiTest(ActionTestCase):
             second_body = str(api.comments[0]["body"])
             self.assertIn("blockwatch: 2 suppressed violation(s)", second_body)
             self.assertIn(
-                "https://github.com/forker/widgets/blob/%s/docs/b.md#L" % head_sha, second_body
+                "https://github.com/acme/widgets/blob/%s/docs/b.md#L" % checkout_sha, second_body
             )
+            self.assertNotIn("deadbeef", second_body)
             self.assertIn("<br>pull request description", second_body)
             self.assertIn(
                 "<code>blockwatch-suppress: docs/a.md:fruit</code><br>"
@@ -278,6 +321,26 @@ class PullRequestApiTest(ActionTestCase):
                 second_body,
             )
             self.assertIn("<code>blockwatch-suppress: docs/b.md</code>", second_body)
+
+            # When GITHUB_SHA is empty, links fall back to pull_request.head.repo and head.sha.
+            api.comment_requests.clear()
+            fallback_links = self.run_against_api(
+                api,
+                number=42,
+                pr_fields={
+                    "html_url": "https://github.com/acme/widgets/pull/42",
+                    "head": {
+                        "sha": checkout_sha,
+                        "repo": {"html_url": "https://github.com/forker/widgets"},
+                    },
+                },
+                GITHUB_SHA="",
+            )
+            self.assertEqual(fallback_links.exit_code, 0)
+            self.assertIn(
+                "https://github.com/forker/widgets/blob/%s/docs/b.md#L" % checkout_sha,
+                str(api.comments[0]["body"]),
+            )
 
             # Unused directives (0 suppressed violations) still delete any stale sticky comment.
             self.git("reset", "--hard", self.base_sha)
@@ -296,12 +359,29 @@ class PullRequestApiTest(ActionTestCase):
             self.assertEqual(api.comments, [])
 
     def test_sticky_comment_finds_existing_comment_across_paginated_comments(self) -> None:
-        """Pagination locates existing sticky comments without mistaking quoted mentions."""
+        """Pagination ignores non-bot lookalikes, patches bot comment, and stops cleanly at cap."""
         self.break_fruit()
         existing = [
-            {"id": 10, "body": "Reviewer discussion"},
-            {"id": 11, "body": "Quoting <!-- blockwatch-action:suppressions --> mid-body"},
-            {"id": 12, "body": "<!-- blockwatch-action:suppressions -->\nstale comment"},
+            {
+                "id": 9,
+                "user": {"login": "attacker", "type": "User"},
+                "body": "<!-- blockwatch-action:suppressions -->\nspoofed human comment",
+            },
+            {
+                "id": 10,
+                "user": {"login": "reviewer", "type": "User"},
+                "body": "Reviewer discussion",
+            },
+            {
+                "id": 11,
+                "user": {"login": "github-actions[bot]", "type": "Bot"},
+                "body": "Quoting <!-- blockwatch-action:suppressions --> mid-body",
+            },
+            {
+                "id": 12,
+                "user": {"login": "github-actions[bot]", "type": "Bot"},
+                "body": "<!-- blockwatch-action:suppressions -->\nstale comment",
+            },
         ]
 
         result, api = self.run_pr_api(
@@ -320,26 +400,103 @@ class PullRequestApiTest(ActionTestCase):
                 ("PATCH", "/repos/acme/widgets/issues/comments/12"),
             ],
         )
-        self.assertEqual(len(api.comments), 3)
-        self.assertIn("Reviewer discussion", str(api.comments[0]["body"]))
-        self.assertIn("Quoting", str(api.comments[1]["body"]))
+        self.assertEqual(len(api.comments), 4)
+        self.assertIn("spoofed human comment", str(api.comments[0]["body"]))
         self.assertIn(
             "<code>blockwatch-suppress: docs/a.md:fruit</code>",
-            str(api.comments[2]["body"]),
+            str(api.comments[3]["body"]),
         )
+
+        with self.subTest("exceeding comment page limit warns instead of posting duplicate"):
+            many_comments = [
+                {
+                    "id": 100 + idx,
+                    "user": {"login": "reviewer", "type": "User"},
+                    "body": "note %d" % idx,
+                }
+                for idx in range(21)
+            ]
+            capped, capped_api = self.run_pr_api(
+                api_body="blockwatch-suppress: docs/a.md:fruit",
+                comments=many_comments,
+                comments_page_size=1,
+                number=8,
+            )
+            self.assertEqual(capped.exit_code, 0)
+            self.assertEqual(len(capped_api.comments), 21)
+            self.assertEqual(len(capped_api.comment_requests), 20)
+            self.assertTrue(
+                any(
+                    a.level == "warning" and "comment pages" in a.message
+                    for a in capped.annotations
+                )
+            )
+
+    def test_sticky_comment_preserves_existing_on_exit_2_and_syncs_despite_summary_error(
+        self,
+    ) -> None:
+        """Exit-2 aborts preserve sticky comments; summary OSError still syncs PR comments."""
+        self.commit_notes("clean commit")
+        sticky = {
+            "id": 1,
+            "user": {"login": "github-actions[bot]", "type": "Bot"},
+            "body": "<!-- blockwatch-action:suppressions -->\nprior comment",
+        }
+
+        with self.subTest("exit 2 leaves existing sticky comment untouched"):
+            aborted, api = self.run_pr_api(
+                api_body="blockwatch-suppress:",
+                comments=[sticky],
+                number=11,
+            )
+            self.assertEqual(aborted.exit_code, 2)
+            self.assertEqual(api.comment_requests, [])
+            self.assertEqual(len(api.comments), 1)
+
+        with self.subTest("summary write OSError does not block sticky comment cleanup"):
+            self.break_fruit("break fruit so summary writes")
+            unwritable_summary = os.path.join(self.workspace, "summary_dir")
+            os.makedirs(unwritable_summary)
+            synced, api = self.run_pr_api(
+                api_body="",
+                comments=[sticky],
+                number=12,
+                GITHUB_STEP_SUMMARY=unwritable_summary,
+            )
+            self.assertEqual(synced.exit_code, 1)
+            self.assertEqual(api.comments, [])
+            self.assertTrue(
+                any(a.level == "warning" and "job summary" in a.message for a in synced.annotations)
+            )
 
     def test_sticky_comment_skips_gracefully_without_write_permission_or_when_disabled(
         self,
     ) -> None:
-        """Read-only/fork 403s log a note cleanly without failing, and `comment: false` skips API."""
+        """Missing token/403 emit warnings cleanly without failing; `comment: false` skips API."""
         self.break_fruit("suppress\n\nblockwatch-suppress: docs/a.md:fruit\n")
 
-        with self.subTest("HTTP 403 on write leaves step passing"):
+        with self.subTest("HTTP 403 on write emits warning annotation and leaves step passing"):
             readonly, api = self.run_pr_api(api_body="", comment_write_status=403, number=5)
             self.assertEqual(readonly.exit_code, 0)
-            self.assertIn("HTTP 403", readonly.stdout)
-            self.assertIn("pull-requests: write", readonly.stdout)
+            self.assertTrue(
+                any(
+                    a.level == "warning"
+                    and "HTTP 403" in a.message
+                    and "pull-requests: write" in a.message
+                    for a in readonly.annotations
+                )
+            )
             self.assertEqual(api.comments, [])
+
+        with self.subTest("missing token when comment is needed emits warning annotation"):
+            no_token = self.run_pull_request("")
+            self.assertEqual(no_token.exit_code, 0)
+            self.assertTrue(
+                any(
+                    a.level == "warning" and "missing token" in a.message
+                    for a in no_token.annotations
+                )
+            )
 
         with self.subTest("comment=false makes no comment API requests"):
             disabled, api = self.run_pr_api(
@@ -357,8 +514,10 @@ class PullRequestApiTest(ActionTestCase):
 
     def test_sticky_comment_skips_ignored_directives_escapes_text_and_caps_rows(self) -> None:
         """Disabled directives post no PR comment; active rows escape untrusted text and cap at 50."""
-        self.write("docs/bad|file (1).md", UNSORTED_FRUIT)
-        self.commit("pipe | <tag> %0A\n\nblockwatch-suppress: docs/bad|file (1).md\n")
+        self.write("docs/bad|file (1)<img src=x>`tick`.md", UNSORTED_FRUIT)
+        self.commit(
+            "pipe | <tag> %0A\n\nblockwatch-suppress: docs/bad|file (1)<img src=x>`tick`.md\n"
+        )
 
         with self.subTest("disabled sources suppress nothing so no PR comment is posted"):
             disabled, api = self.run_pr_api(
@@ -378,11 +537,14 @@ class PullRequestApiTest(ActionTestCase):
             self.assertEqual(escaped.exit_code, 0)
             self.assertEqual(len(api.comments), 1)
             comment = str(api.comments[0]["body"])
-            self.assertIn("docs/bad%7Cfile%20%281%29.md#L", comment)
-            self.assertIn("docs/bad&#124;file (1).md:", comment)
-            self.assertIn("&lt;tag&gt;", comment)
-            self.assertIn("&#124;", comment)
-            self.assertNotIn("<tag>", comment)
+            self.assertIn("docs/bad%7Cfile%20%281%29%3Cimg%20src%3Dx%3E%60tick%60.md#L", comment)
+            for rendered in (comment, escaped.summary):
+                self.assertIn("docs/bad&#124;file (1)&lt;img src=x&gt;&#96;tick&#96;.md:", rendered)
+                self.assertIn("&lt;tag&gt;", rendered)
+                self.assertIn("&#124;", rendered)
+                self.assertNotIn("<tag>", rendered)
+                self.assertNotIn("<img", rendered)
+                self.assertNotIn("`tick`", rendered)
 
         with self.subTest("more than 50 suppressed violations caps PR comment rows safely"):
             self.git("reset", "--hard", self.base_sha)

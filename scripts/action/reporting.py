@@ -6,7 +6,15 @@ import html
 import json
 from dataclasses import dataclass
 
-from action.config import RUN_FAILED, SUPPRESSION_SOURCES, JsonObject, env
+from action.config import (
+    COMMIT_SOURCE,
+    DESCRIPTION_SOURCE,
+    RUN_FAILED,
+    SUPPRESSION_SOURCES,
+    JsonObject,
+    env,
+    escape_data,
+)
 from action.diagnostics import Violation
 from action.github_api import PullRequestLinks
 from action.suppressions import SuppressionDirective
@@ -23,8 +31,8 @@ COMMENT_ROW_LIMIT: int = 50
 COMMENT_CHAR_LIMIT: int = 60000
 
 _SOURCE_LABELS: dict[str, str] = {
-    "commits": "commit message",
-    "description": "pull request description",
+    COMMIT_SOURCE: "commit message",
+    DESCRIPTION_SOURCE: "pull request description",
 }
 
 
@@ -41,7 +49,7 @@ class SuppressionAnnotationText:
 
 SUPPRESSION_ANNOTATION_COPY: tuple[SuppressionAnnotationText, ...] = (
     SuppressionAnnotationText(
-        source="commits",
+        source=COMMIT_SOURCE,
         active_title="blockwatch: suppression in commit message",
         ignored_title="blockwatch: ignored suppression in commit message",
         active_intro="Commit message(s) contain blockwatch-suppress directives:",
@@ -51,7 +59,7 @@ SUPPRESSION_ANNOTATION_COPY: tuple[SuppressionAnnotationText, ...] = (
         ),
     ),
     SuppressionAnnotationText(
-        source="description",
+        source=DESCRIPTION_SOURCE,
         active_title="blockwatch: suppression in pull request description",
         ignored_title="blockwatch: ignored suppression in pull request description",
         active_intro=(
@@ -66,17 +74,8 @@ SUPPRESSION_ANNOTATION_COPY: tuple[SuppressionAnnotationText, ...] = (
 )
 
 
-def escape_data(value: str) -> str:
-    """Percent-encode a workflow command's message.
-
-    A command is delimited text: a raw newline would end it. GitHub's own
-    toolkit encodes exactly these, and the runner decodes them again.
-    """
-    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-
-
 def escape_property(value: str) -> str:
-    """The same, plus the separators between properties."""
+    """Percent-encode a workflow command property value."""
     return escape_data(value).replace(":", "%3A").replace(",", "%2C")
 
 
@@ -210,34 +209,29 @@ def emit_run_error(stderr: str) -> None:
     print("::error title=%s::%s" % (title, escape_data(message)))
 
 
-def escape_html_cell(value: str) -> str:
-    """Escape untrusted text for inclusion inside `<code>...</code>` in a GFM table."""
-    clean = value.replace("\r", " ").replace("\n", " ")
-    return html.escape(clean).replace("|", "&#124;")
-
-
-def _html_code(value: str) -> str:
-    return "<code>%s</code>" % escape_html_cell(value)
-
-
-def _escape_html_multiline(value: str) -> str:
-    """Escape untrusted text for Markdown table cells while preserving line breaks via `<br>`."""
-    escaped = html.escape(value).replace("|", "&#124;")
-    return escaped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+def _escape_cell(value: str, *, multiline: bool = False, code: bool = False) -> str:
+    """Escape untrusted text for a GFM table cell (plain, `<br>` multiline, or `<code>`)."""
+    clean = value.replace("\r\n", "\n").replace("\r", "\n")
+    if not multiline:
+        clean = clean.replace("\n", " ")
+    escaped = html.escape(clean).replace("|", "&#124;").replace("`", "&#96;")
+    if multiline:
+        return escaped.replace("\n", "<br>")
+    return "<code>%s</code>" % escaped if code else escaped
 
 
 def _directive_source_cell(
     directive: SuppressionDirective,
     links: PullRequestLinks | None = None,
 ) -> str:
-    if directive.source != "commits":
+    if directive.source != COMMIT_SOURCE:
         return "pull request description"
     if not directive.commit:
         return "commit message"
-    commit_ref = _html_code(directive.commit)
+    commit_ref = _escape_cell(directive.commit, code=True)
     if links is not None:
         commit_ref = _html_link(links.commit_url(directive.commit_sha), commit_ref)
-    subject = escape_html_cell(truncate_text(directive.subject))
+    subject = _escape_cell(truncate_text(directive.subject))
     return "commit %s (%s)" % (commit_ref, subject) if subject else "commit %s" % commit_ref
 
 
@@ -245,7 +239,7 @@ def _directive_status_cell(directive: SuppressionDirective, run_failed: bool) ->
     if not directive.applied:
         flag = (
             "suppress_from_commits"
-            if directive.source == "commits"
+            if directive.source == COMMIT_SOURCE
             else "suppress_from_description"
         )
         return "ignored (<code>%s</code> is false)" % flag
@@ -260,7 +254,7 @@ def format_directive_row(directive: SuppressionDirective, run_failed: bool) -> s
     return "| %s | %s | %s |" % (
         _directive_source_cell(directive),
         _directive_status_cell(directive, run_failed),
-        _html_code(directive.line),
+        _escape_cell(directive.line, code=True),
     )
 
 
@@ -313,18 +307,11 @@ def directives_summary_section(
 def format_violation_row(violation: Violation) -> str:
     """Format one row in the job summary's violations table."""
     location = (
-        ("%s:%s" % (violation.path, violation.start_line)).replace("|", r"\|")
+        _escape_cell("%s:%s" % (violation.path, violation.start_line), code=True)
         if violation.path
         else "—"
     )
-    # Markdown here, not a workflow command: a pipe would end the cell and a
-    # newline has to become a line break.
-    cell = (
-        violation.message.replace("\r\n", "\n")
-        .replace("\r", "\n")
-        .replace("|", r"\|")
-        .replace("\n", "<br>")
-    )
+    message = _escape_cell(violation.message, multiline=True)
     if not violation.suppressed:
         code = violation.code
     elif any(s in SUPPRESSION_SOURCES for s in violation.suppression_sources):
@@ -334,8 +321,8 @@ def format_violation_row(violation: Violation) -> str:
         )
     else:
         code = violation.code + " (suppressed)"
-    address = (violation.address or "—").replace("|", r"\|")
-    return "| `%s` | %s | %s | %s |" % (location, code.replace("|", r"\|"), cell, address)
+    address = _escape_cell(violation.address) if violation.address else "—"
+    return "| %s | %s | %s | %s |" % (location, _escape_cell(code), message, address)
 
 
 def violations_summary_section(violations: list[Violation]) -> str:
@@ -381,7 +368,7 @@ def _html_link(url: str | None, label_html: str) -> str:
 
 
 def _format_comment_violation_row(violation: Violation, links: PullRequestLinks) -> str:
-    location_label = _html_code("%s:%s" % (violation.path, violation.start_line))
+    location_label = _escape_cell("%s:%s" % (violation.path, violation.start_line), code=True)
     location = (
         _html_link(
             links.code_url(violation.path, violation.start_line, violation.end_line),
@@ -390,12 +377,12 @@ def _format_comment_violation_row(violation: Violation, links: PullRequestLinks)
         if violation.path
         else "—"
     )
-    message = _escape_html_multiline(violation.message)
+    message = _escape_cell(violation.message, multiline=True)
     sources = "<br>".join(
         _directive_source_cell(directive, links) for directive in violation.matched_directives
     )
     directives = "<br>".join(
-        _html_code(directive.line) for directive in violation.matched_directives
+        _escape_cell(directive.line, code=True) for directive in violation.matched_directives
     )
     return "| %s | %s | %s | %s |" % (location, message, sources or "—", directives or "—")
 
@@ -448,11 +435,14 @@ def render_pr_comment(violations: list[Violation], links: PullRequestLinks) -> s
     return _truncate_comment_body("\n".join(lines) + "\n")
 
 
-def bounded_json_array(items: list[JsonObject], limit: int = OUTPUT_JSON_LIMIT) -> str:
+def bounded_json_array(
+    items: list[JsonObject],
+    limit: int = OUTPUT_JSON_LIMIT,
+) -> tuple[str, bool]:
     """Serialize `items` as single-line JSON without exceeding `limit` bytes."""
     encoded = json.dumps(items)
     if len(encoded.encode("utf-8")) <= limit:
-        return encoded
+        return encoded, False
     low, high = 0, len(items)
     while low < high:
         mid = (low + high + 1) // 2
@@ -460,18 +450,30 @@ def bounded_json_array(items: list[JsonObject], limit: int = OUTPUT_JSON_LIMIT) 
             low = mid
         else:
             high = mid - 1
-    return json.dumps(items[:low])
+    return json.dumps(items[:low]), True
 
 
 def write_outputs(directives: list[SuppressionDirective]) -> None:
-    """Write detected suppression directives to `$GITHUB_OUTPUT` when set."""
+    """Write detected suppression directives and truncation flag to `$GITHUB_OUTPUT`."""
     path = env("GITHUB_OUTPUT")
     if not path:
         return
 
-    outputs = (("commit_suppressions", "commits"), ("description_suppressions", "description"))
+    outputs = (
+        ("commit_suppressions", COMMIT_SOURCE),
+        ("description_suppressions", DESCRIPTION_SOURCE),
+    )
+    truncated = False
     with open(path, "a", encoding="utf-8") as handle:
         for key, source in outputs:
             items = [d.to_output_dict() for d in directives if d.source == source]
-            value = bounded_json_array(items).replace("\r", " ").replace("\n", " ")
+            raw_json, was_truncated = bounded_json_array(items)
+            if was_truncated:
+                truncated = True
+                print(
+                    "::warning title=blockwatch::Step output '%s' exceeded %d bytes "
+                    "and was truncated." % (key, OUTPUT_JSON_LIMIT)
+                )
+            value = raw_json.replace("\r", " ").replace("\n", " ")
             handle.write("%s=%s\n" % (key, value))
+        handle.write("suppressions_truncated=%s\n" % ("true" if truncated else "false"))

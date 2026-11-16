@@ -150,6 +150,7 @@ class FakeGitHubApi:
         comments_status: int | None = None,
         comment_write_status: int = 200,
         comments_page_size: int | None = None,
+        redirects: dict[str, str] | None = None,
     ) -> None:
         self.status = status
         self.body = body
@@ -158,6 +159,7 @@ class FakeGitHubApi:
         self.comments_status = status if comments_status is None else comments_status
         self.comment_write_status = comment_write_status
         self.comments_page_size = comments_page_size
+        self.redirects: dict[str, str] = dict(redirects or {})
         self.requests: list[tuple[str, dict[str, str]]] = []
         self.comment_requests: list[tuple[str, str, dict[str, str], JsonObject | None]] = []
         self._next_id = max([int(c.get("id", 0)) for c in self.comments] + [0]) + 1
@@ -222,6 +224,9 @@ class FakeGitHubApi:
 
             def do_GET(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
+                if parsed.path in parent.redirects:
+                    self._send_json(302, b"", {"Location": parent.redirects[parsed.path]})
+                    return
                 if parsed.path.endswith("/comments"):
                     self._handle_comments_get(parsed)
                     return
@@ -240,6 +245,7 @@ class FakeGitHubApi:
                     return
                 comment: JsonObject = {
                     "id": parent._next_id,
+                    "user": {"login": "github-actions[bot]", "type": "Bot"},
                     "body": str((data or {}).get("body") or ""),
                 }
                 parent._next_id += 1
@@ -458,6 +464,7 @@ class ActionTestCase(unittest.TestCase):
         comments_status: int | None = None,
         comment_write_status: int = 200,
         comments_page_size: int | None = None,
+        redirects: dict[str, str] | None = None,
         snapshot_body: str | None = "",
         number: int = 1,
         repository: str = "acme/widgets",
@@ -474,6 +481,7 @@ class ActionTestCase(unittest.TestCase):
             comments_status=comments_status,
             comment_write_status=comment_write_status,
             comments_page_size=comments_page_size,
+            redirects=redirects,
         ) as api:
             result = self.run_against_api(
                 api,

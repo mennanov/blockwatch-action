@@ -8,7 +8,14 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from action.config import JsonObject, env, event_pull_request
+from action.config import (
+    COMMIT_SOURCE,
+    DESCRIPTION_SOURCE,
+    Failure,
+    JsonObject,
+    env,
+    event_pull_request,
+)
 from action.github_api import fetch_pull_request_body
 
 # The address prefix blockwatch reads out of commit messages and descriptions.
@@ -36,7 +43,7 @@ class SuppressionDirective:
             "address": self.address,
             "applied": self.applied,
         }
-        if self.source == "commits":
+        if self.source == COMMIT_SOURCE:
             return {"commit": self.commit, "subject": self.subject, **entry}
         return entry
 
@@ -134,17 +141,19 @@ def collect_commit_suppressions(
     read_commits: bool,
 ) -> tuple[list[SuppressionDirective], str | None]:
     """Collect commit-message suppression directives and blockwatch input when enabled."""
-    log = subprocess.run(
-        git_log_command(event_name, before, current_sha),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    commits: list[tuple[str, str, str, str]] = (
-        parse_git_log(log.stdout) if log.returncode == 0 else []
-    )
+    command = git_log_command(event_name, before, current_sha)
+    log = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if log.returncode != 0:
+        detail = log.stderr.decode("utf-8", "replace").strip()
+        suffix = ": %s" % detail if detail else ""
+        raise Failure(
+            "`%s` failed with exit code %d, so commit suppressions cannot be read%s"
+            % (" ".join(command), log.returncode, suffix)
+        )
+    commits = parse_git_log(log.stdout)
     directives = [
         SuppressionDirective(
-            source="commits",
+            source=COMMIT_SOURCE,
             line=line,
             address=suppression_address(line),
             applied=read_commits,
@@ -183,7 +192,7 @@ def collect_description_suppressions(
 
     directives = [
         SuppressionDirective(
-            source="description",
+            source=DESCRIPTION_SOURCE,
             line=line,
             address=suppression_address(line),
             applied=read_description,

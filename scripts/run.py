@@ -73,21 +73,40 @@ def report_run_outcome(
     try:
         violations = parse_diagnostics(diagnostics, config.output_format)
         classify_violations(violations, collection.directives)
-        if config.annotations:
-            emit_suppression_annotations(collection.directives, lines_suppress, run_failed)
-            emit_annotations(violations, config.annotations_limit, lines_suppress)
-            if run_failed:
-                emit_run_error(diagnostics)
-        if config.summary:
-            write_summary(violations, collection.directives, lines_suppress, run_failed)
-        if config.comment and event_name == "pull_request":
-            comment_body = render_pr_comment(violations, pull_request_links(payload))
-            sync_pull_request_comment(payload, COMMENT_MARKER, comment_body)
     except Exception as error:
         print(
             "::warning title=blockwatch::Could not turn the blockwatch "
             "diagnostics into annotations (%s). They are in the job log above." % error
         )
+        if config.annotations and run_failed:
+            emit_run_error(diagnostics)
+        return
+
+    if config.annotations:
+        try:
+            emit_suppression_annotations(collection.directives, lines_suppress, run_failed)
+            emit_annotations(violations, config.annotations_limit, lines_suppress)
+            if run_failed:
+                emit_run_error(diagnostics)
+        except Exception as error:
+            print("::warning title=blockwatch::Could not emit workflow annotations (%s)." % error)
+
+    if config.summary:
+        try:
+            write_summary(violations, collection.directives, lines_suppress, run_failed)
+        except Exception as error:
+            print("::warning title=blockwatch::Could not write job summary (%s)." % error)
+
+    # Preserve any existing sticky comment when blockwatch could not finish evaluating.
+    if config.comment and event_name == "pull_request" and not run_failed:
+        try:
+            comment_body = render_pr_comment(violations, pull_request_links(payload))
+            sync_pull_request_comment(payload, COMMENT_MARKER, comment_body)
+        except Exception as error:
+            print(
+                "::warning title=blockwatch::Could not sync pull request suppression "
+                "comment (%s)." % error
+            )
 
 
 def main() -> int:
@@ -102,28 +121,27 @@ def main() -> int:
     current_sha = env("GITHUB_SHA")
     before = push_base(event_name, payload)
 
-    with write_suppression_file(
-        event_name,
-        payload,
-        before,
-        current_sha,
-        config.suppress_from_commits,
-        config.suppress_from_description,
-    ) as collection:
-        emit_outputs_safely(collection.directives)
-        command = diff_command(event_name, before, current_sha)
-        try:
+    try:
+        with write_suppression_file(
+            event_name,
+            payload,
+            before,
+            current_sha,
+            config.suppress_from_commits,
+            config.suppress_from_description,
+        ) as collection:
+            emit_outputs_safely(collection.directives)
+            command = diff_command(event_name, before, current_sha)
             status, diagnostics = run_blockwatch(
                 command, blockwatch_args(collection.file_path), config.only_changed
             )
-        except Failure as error:
-            print("Error: %s." % error, file=sys.stderr)
-            return 1
-
-        sys.stdout.flush()
-        sys.stderr.write(diagnostics)
-        sys.stderr.flush()
-        report_run_outcome(config, collection, status, diagnostics, event_name, payload)
+            sys.stdout.flush()
+            sys.stderr.write(diagnostics)
+            sys.stderr.flush()
+            report_run_outcome(config, collection, status, diagnostics, event_name, payload)
+    except Failure as error:
+        print("Error: %s." % error, file=sys.stderr)
+        return 1
 
     # blockwatch's exit code is what fails the job. Reporting only changes where
     # diagnostics and suppression attempts are shown.

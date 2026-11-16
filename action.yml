@@ -90,6 +90,9 @@ outputs:
   description_suppressions:
     description: 'JSON array of "blockwatch-suppress:" entries found in the pull request description (each with "line", "address", and "applied")'
     value: ${{ steps.diff.outputs.description_suppressions }}
+  suppressions_truncated:
+    description: '"true" when commit_suppressions or description_suppressions was truncated to fit GitHub''s 512 KiB output limit, otherwise "false"'
+    value: ${{ steps.diff.outputs.suppressions_truncated }}
 
 runs:
   using: 'composite'

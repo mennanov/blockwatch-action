@@ -375,15 +375,18 @@ The mechanics, in the order they bite:
   `notice`. The annotation carries the violation's suppression address when the block has a name
   (unnamed blocks have no address). That address is otherwise only in the JSON.
 - **Step outputs (`GITHUB_OUTPUT`) record detected commit and PR-description suppression
-  directives (`commit_suppressions`, `description_suppressions`)** regardless of `annotations`,
-  `summary`, or `comment` settings (using single-line `json.dumps` bounded at 512 KiB).
+  directives (`commit_suppressions`, `description_suppressions`, plus `suppressions_truncated`)**
+  regardless of `annotations`, `summary`, or `comment` settings (using single-line `json.dumps`
+  bounded at 512 KiB, emitting a warning when truncated).
 - **Sticky PR suppression comments (`comment`, default `true`)** are synced by
   [`scripts/action/github_api.py`](scripts/action/github_api.py) on `pull_request`
   runs so actually suppressed violations are visible on the PR Overview timeline too (marker
-  `<!-- blockwatch-action:suppressions -->`, single table with Location code link, Message, Source commit diff
-  link, and Suppression directive, capped at 50 rows and 60,000 characters). Unchanged comments skip `PATCH`,
-  runs with no remaining suppressed violations `DELETE` any existing sticky comment, and read-only tokens (`HTTP 403`
-  from `pull-requests: read` or fork PRs) log a note without failing the step.
+  `<!-- blockwatch-action:suppressions -->` on bot-authored comments, single table with Location code
+  link on the checked-out commit, Message, Source commit diff link, and Suppression directive,
+  capped at 50 rows and 60,000 characters). Unchanged comments skip `PATCH`, evaluated runs with no
+  remaining suppressed violations `DELETE` any existing sticky comment (skipped on exit 2 or
+  unparseable diagnostics), and missing tokens or `HTTP 403`s (`pull-requests: read` or fork PRs)
+  emit a `::warning` without failing the step.
 - **Python 3 is the only runtime requirement** the reporting adds, and the wrapper prefers
   `python3`, falling back to `python` for Git Bash on the Windows runners. `jq` and `curl`
   are not used by this step at all any more. The README lists it under requirements.

@@ -9,9 +9,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from http.client import HTTPMessage
+from typing import IO, Any
 
-from action.config import JsonObject, env, event_pull_request
+from action.config import JsonObject, dict_field, env, escape_data, event_pull_request
 
 API_TIMEOUT_SECONDS: int = 30
 MAX_COMMENT_PAGES: int = 20
@@ -27,11 +28,6 @@ def _http_url(value: object) -> str:
     if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
         return ""
     return stripped
-
-
-def _dict_field(obj: JsonObject, key: str) -> JsonObject:
-    value = obj.get(key)
-    return value if isinstance(value, dict) else {}
 
 
 def _repo_web_url(server_url: str, repository: object) -> str:
@@ -92,16 +88,24 @@ def pull_request_links(payload: JsonObject) -> PullRequestLinks:
     if not pr_url and repo_url and number:
         pr_url = "%s/pull/%s" % (repo_url, number)
 
-    head = _dict_field(pr, "head")
-    head_repo = _dict_field(head, "repo")
-    blob_repo_url = (
-        _http_url(head_repo.get("html_url"))
-        or _repo_web_url(server_url, head_repo.get("full_name"))
-        or repo_url
+    head = dict_field(pr, "head")
+    head_repo = dict_field(head, "repo")
+    head_repo_url = _http_url(head_repo.get("html_url")) or _repo_web_url(
+        server_url, head_repo.get("full_name")
     )
 
-    raw_sha = str(head.get("sha") or env("GITHUB_SHA")).strip()
-    head_sha = raw_sha if _SAFE_SHA.match(raw_sha) else ""
+    # Line numbers come from the checked-out revision (the merge commit on PRs),
+    # which lives on the base repository even for fork PRs. Only fall back to
+    # `pull_request.head` when `GITHUB_SHA` is unavailable.
+    checkout_sha = env("GITHUB_SHA").strip()
+    if _SAFE_SHA.match(checkout_sha):
+        head_sha = checkout_sha
+        blob_repo_url = repo_url or head_repo_url
+    else:
+        raw_head_sha = str(head.get("sha") or "").strip()
+        head_sha = raw_head_sha if _SAFE_SHA.match(raw_head_sha) else ""
+        blob_repo_url = head_repo_url or repo_url
+
     return PullRequestLinks(
         pr_url=pr_url,
         repo_url=repo_url,
@@ -155,6 +159,40 @@ def _api_error_text(error: Exception) -> str:
     return str(error)
 
 
+def _same_origin(base_url: str, candidate_url: str) -> bool:
+    base = urllib.parse.urlparse(base_url)
+    candidate = urllib.parse.urlparse(candidate_url)
+    return (
+        candidate.scheme.lower() in ("http", "https")
+        and candidate.scheme.lower() == base.scheme.lower()
+        and candidate.netloc == base.netloc
+    )
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse HTTP redirects that leave the request origin so `Authorization` cannot leak."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        resolved = urllib.parse.urljoin(req.full_url, newurl)
+        if not _same_origin(req.full_url, resolved):
+            fp.close()
+            raise urllib.error.URLError("blocked cross-origin redirect from GitHub API request")
+        return super().redirect_request(req, fp, code, msg, headers, resolved)
+
+
+_API_OPENER: urllib.request.OpenerDirector = urllib.request.build_opener(
+    _SameOriginRedirectHandler()
+)
+
+
 def _github_request(
     method: str,
     url: str,
@@ -173,7 +211,7 @@ def _github_request(
         data = json.dumps(payload).encode("utf-8")
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=API_TIMEOUT_SECONDS) as response:
+    with _API_OPENER.open(request, timeout=API_TIMEOUT_SECONDS) as response:
         raw = response.read()
         link = response.headers.get("Link") or ""
     parsed = json.loads(raw.decode("utf-8")) if raw else None
@@ -185,15 +223,7 @@ def _next_page_url(link_header: str, api_url: str) -> str | None:
     if not match:
         return None
     candidate = match.group(1)
-    base_parts = urllib.parse.urlparse(api_url)
-    next_parts = urllib.parse.urlparse(candidate)
-    if (
-        next_parts.scheme.lower() not in ("http", "https")
-        or next_parts.scheme.lower() != base_parts.scheme.lower()
-        or next_parts.netloc != base_parts.netloc
-    ):
-        return None
-    return candidate
+    return candidate if _same_origin(api_url, candidate) else None
 
 
 def fetch_pull_request_body(payload: JsonObject) -> tuple[str, str]:
@@ -222,6 +252,15 @@ def fetch_pull_request_body(payload: JsonObject) -> tuple[str, str]:
     return str(body), "the API, as it reads now"
 
 
+def _is_bot_comment(item: JsonObject) -> bool:
+    user = dict_field(item, "user")
+    user_type = user.get("type")
+    if user_type == "Bot":
+        return True
+    login = user.get("login")
+    return user_type is None and isinstance(login, str) and login.endswith("[bot]")
+
+
 def _find_sticky_comment(target: PullRequestTarget, marker: str) -> tuple[int, str] | None:
     url: str | None = target.comments_url + "?per_page=100"
     for _ in range(MAX_COMMENT_PAGES):
@@ -231,7 +270,7 @@ def _find_sticky_comment(target: PullRequestTarget, marker: str) -> tuple[int, s
         if not isinstance(page, list):
             return None
         for item in page:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or not _is_bot_comment(item):
                 continue
             comment_id = item.get("id")
             comment_body = item.get("body")
@@ -243,6 +282,10 @@ def _find_sticky_comment(target: PullRequestTarget, marker: str) -> tuple[int, s
             ):
                 return comment_id, comment_body
         url = _next_page_url(link, target.api_url)
+    if url:
+        raise RuntimeError(
+            "exceeded %d comment pages without finding sticky comment" % MAX_COMMENT_PAGES
+        )
     return None
 
 
@@ -272,32 +315,32 @@ def _apply_comment_change(
         _github_request("PATCH", target.comment_url(comment_id), target.token, {"body": body})
 
 
+def _warn(message: str) -> None:
+    print("::warning title=blockwatch::%s" % escape_data(message))
+
+
 def sync_pull_request_comment(payload: JsonObject, marker: str, body: str | None) -> None:
     """Create, update, or remove a sticky PR comment without failing the workflow step."""
     target, skip_reason = resolve_pull_request_target(payload)
     if target is None:
         if body is not None:
             detail = skip_reason or "missing token, repository, or pull request number"
-            print("Note: skipped pull request suppression comment (%s)." % detail)
+            _warn("Skipped pull request suppression comment (%s)." % detail)
         return
 
     try:
         existing = _find_sticky_comment(target, marker)
     except Exception as error:
-        print(
-            "Note: could not read pull request suppression comments (%s)." % _api_error_text(error)
-        )
+        _warn("Could not read pull request suppression comments (%s)." % _api_error_text(error))
         return
 
     try:
         _apply_comment_change(target, existing, body)
     except Exception as error:
         if isinstance(error, urllib.error.HTTPError) and error.code == 403:
-            print(
-                "Note: skipped pull request suppression comment "
+            _warn(
+                "Skipped pull request suppression comment "
                 "(HTTP 403 — workflow may lack 'pull-requests: write' permission or be from a fork)."
             )
             return
-        print(
-            "Note: could not update pull request suppression comment (%s)." % _api_error_text(error)
-        )
+        _warn("Could not update pull request suppression comment (%s)." % _api_error_text(error))
