@@ -26,7 +26,7 @@ from blockwatch_action.config import (
     read_config,
 )
 from blockwatch_action.diagnostics import classify_violations, parse_diagnostics
-from blockwatch_action.github_api import sync_pull_request_comment
+from blockwatch_action.github_api import pull_request_links, sync_pull_request_comment
 from blockwatch_action.reporting import (
     COMMENT_MARKER,
     emit_annotations,
@@ -81,9 +81,7 @@ def report_run_outcome(
         if config.summary:
             write_summary(violations, collection.directives, lines_suppress, run_failed)
         if config.comment and event_name == "pull_request":
-            comment_body = render_pr_comment(
-                violations, collection.directives, lines_suppress, run_failed
-            )
+            comment_body = render_pr_comment(violations, pull_request_links(payload))
             sync_pull_request_comment(payload, COMMENT_MARKER, comment_body)
     except Exception as error:
         print(

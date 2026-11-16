@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import urllib.error
 import urllib.parse
@@ -15,6 +16,92 @@ from blockwatch_action.config import JsonObject, env, event_pull_request
 API_TIMEOUT_SECONDS: int = 30
 MAX_COMMENT_PAGES: int = 20
 _NEXT_LINK: re.Pattern[str] = re.compile(r'<([^>]+)>;\s*rel="next"')
+_SAFE_SHA: re.Pattern[str] = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+
+def _http_url(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    stripped = value.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(stripped)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        return ""
+    return stripped
+
+
+def _dict_field(obj: JsonObject, key: str) -> JsonObject:
+    value = obj.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+@dataclass(frozen=True)
+class PullRequestLinks:
+    """Resolved GitHub web URLs for linking PR comment locations and commit diffs."""
+
+    pr_url: str
+    repo_url: str
+    blob_repo_url: str
+    head_sha: str
+
+    def code_url(self, path: str, start_line: int, end_line: int) -> str | None:
+        """Build a blob permalink to the flagged line range on the PR head revision."""
+        if not path or not self.blob_repo_url or not self.head_sha:
+            return None
+        rel_path = posixpath.normpath(path.replace("\\", "/")).lstrip("/")
+        if not rel_path or rel_path == "." or rel_path.startswith("../"):
+            return None
+        encoded = urllib.parse.quote(rel_path, safe="/")
+        anchor = (
+            "#L%d-L%d" % (start_line, end_line) if end_line > start_line else "#L%d" % start_line
+        )
+        return "%s/blob/%s/%s%s" % (self.blob_repo_url, self.head_sha, encoded, anchor)
+
+    def commit_url(self, commit_sha: str) -> str | None:
+        """Build a PR commit diff link (falling back to repo commit link) for `commit_sha`."""
+        if not commit_sha or not _SAFE_SHA.match(commit_sha):
+            return None
+        if self.pr_url:
+            return "%s/commits/%s" % (self.pr_url, commit_sha)
+        if self.repo_url:
+            return "%s/commit/%s" % (self.repo_url, commit_sha)
+        return None
+
+
+def pull_request_links(payload: JsonObject) -> PullRequestLinks:
+    """Resolve GitHub web URLs for code lines and commit diffs on a pull request."""
+    server_url = _http_url(env("GITHUB_SERVER_URL", "https://github.com"))
+    repository = env("GITHUB_REPOSITORY").strip("/")
+    repo_url = (
+        "%s/%s" % (server_url, urllib.parse.quote(repository, safe="/"))
+        if server_url and repository
+        else ""
+    )
+
+    pr = event_pull_request(payload)
+    number = pr.get("number")
+    has_number = bool(number and isinstance(number, (int, str)) and not isinstance(number, bool))
+    pr_url = _http_url(pr.get("html_url"))
+    if not pr_url and repo_url and has_number:
+        pr_url = "%s/pull/%s" % (repo_url, number)
+
+    head = _dict_field(pr, "head")
+    head_repo = _dict_field(head, "repo")
+    blob_repo_url = _http_url(head_repo.get("html_url"))
+    if not blob_repo_url and server_url and isinstance(head_repo.get("full_name"), str):
+        full_name = str(head_repo["full_name"]).strip("/")
+        if full_name:
+            blob_repo_url = "%s/%s" % (server_url, urllib.parse.quote(full_name, safe="/"))
+    if not blob_repo_url:
+        blob_repo_url = repo_url
+
+    raw_sha = str(head.get("sha") or env("GITHUB_SHA")).strip()
+    head_sha = raw_sha if _SAFE_SHA.match(raw_sha) else ""
+    return PullRequestLinks(
+        pr_url=pr_url,
+        repo_url=repo_url,
+        blob_repo_url=blob_repo_url,
+        head_sha=head_sha,
+    )
 
 
 @dataclass(frozen=True)

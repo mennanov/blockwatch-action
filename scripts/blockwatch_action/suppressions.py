@@ -25,6 +25,7 @@ class SuppressionDirective:
     address: str
     applied: bool
     commit: str = ""
+    commit_sha: str = ""
     subject: str = ""
     matched_violations: int = 0
 
@@ -76,7 +77,7 @@ def git_log_command(event_name: str, before: str | None, current_sha: str) -> li
     silence a violation. `-z` separates commits with NUL bytes so multi-line
     bodies parse unambiguously without colliding with commit content.
     """
-    fmt = "--format=%h%x00%s%x00%B"
+    fmt = "--format=%H%x00%h%x00%s%x00%B"
     if event_name == "pull_request":
         # Two dots, not the three the diff uses: this wants the commits the pull
         # request adds, not a patch. The merge commit GitHub checks out is
@@ -96,14 +97,15 @@ def git_log_command(event_name: str, before: str | None, current_sha: str) -> li
     return ["git", "log", "-1", "-z", fmt, "HEAD"]
 
 
-def parse_git_log(raw: bytes) -> list[tuple[str, str, str]]:
-    """Decode `-z --format=%h%x00%s%x00%B` output into `(short_sha, subject, body)` tuples."""
+def parse_git_log(raw: bytes) -> list[tuple[str, str, str, str]]:
+    """Decode `-z --format=%H%x00%h%x00%s%x00%B` output into commit metadata and bodies."""
     text = raw.decode("utf-8", "replace")
     if not text:
         return []
     parts = text.split("\0")
     return [
-        (parts[index], parts[index + 1], parts[index + 2]) for index in range(0, len(parts) - 2, 3)
+        (parts[index], parts[index + 1], parts[index + 2], parts[index + 3])
+        for index in range(0, len(parts) - 3, 4)
     ]
 
 
@@ -137,7 +139,9 @@ def collect_commit_suppressions(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    commits: list[tuple[str, str, str]] = parse_git_log(log.stdout) if log.returncode == 0 else []
+    commits: list[tuple[str, str, str, str]] = (
+        parse_git_log(log.stdout) if log.returncode == 0 else []
+    )
     directives = [
         SuppressionDirective(
             source="commits",
@@ -145,9 +149,10 @@ def collect_commit_suppressions(
             address=suppression_address(line),
             applied=read_commits,
             commit=short_sha,
+            commit_sha=full_sha,
             subject=subject,
         )
-        for short_sha, subject, body in commits
+        for full_sha, short_sha, subject, body in commits
         for line in suppression_lines(body)
     ]
     if not read_commits:
@@ -156,7 +161,7 @@ def collect_commit_suppressions(
             [d.line for d in directives],
         )
         return directives, None
-    messages = "\n".join(body for _, _, body in commits) + ("\n" if commits else "")
+    messages = "\n".join(body for _, _, _, body in commits) + ("\n" if commits else "")
     return directives, messages
 
 

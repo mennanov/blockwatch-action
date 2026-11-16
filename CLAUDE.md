@@ -377,10 +377,11 @@ The mechanics, in the order they bite:
   `summary`, or `comment` settings (using single-line `json.dumps` bounded at 512 KiB).
 - **Sticky PR suppression comments (`comment`, default `true`)** are synced by
   [`scripts/blockwatch_action/github_api.py`](scripts/blockwatch_action/github_api.py) on `pull_request`
-  runs so suppressions are visible on the PR Overview timeline too (marker `<!-- blockwatch-action:suppressions -->`,
-  capped at 50 rows and 60,000 characters). Unchanged comments skip `PATCH`, cleared directives `DELETE` any
-  existing sticky comment, and read-only tokens (`HTTP 403` from `pull-requests: read` or fork PRs) log a note
-  without failing the step.
+  runs so actually suppressed violations are visible on the PR Overview timeline too (marker
+  `<!-- blockwatch-action:suppressions -->`, single table with Location code link, Message, Source commit diff
+  link, and Suppression directive, capped at 50 rows and 60,000 characters). Unchanged comments skip `PATCH`,
+  runs with no remaining suppressed violations `DELETE` any existing sticky comment, and read-only tokens (`HTTP 403`
+  from `pull-requests: read` or fork PRs) log a note without failing the step.
 - **Python 3 is the only runtime requirement** the reporting adds, and the wrapper prefers
   `python3`, falling back to `python` for Git Bash on the Windows runners. `jq` and `curl`
   are not used by this step at all any more. The README lists it under requirements.

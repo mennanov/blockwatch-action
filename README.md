@@ -20,7 +20,7 @@ jobs:
 ```
 <!-- </block> -->
 
-By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional. `pull-requests: write` allows the action to post or update a sticky pull request comment when `blockwatch-suppress:` directives appear in commit messages or the PR description (if omitted or running from a fork, the comment is skipped without failing). Pin the action to a specific release tag (as above) or a full commit SHA rather than the moving `@v1` tag; see [What a commit SHA pin covers](#known-limitations).
+By default, this checks every block in the repository and uses the git diff to identify changes. All inputs are optional. `pull-requests: write` allows the action to post or update a sticky pull request comment when violations are suppressed via commit messages or the PR description (if omitted or running from a fork, the comment is skipped without failing). Pin the action to a specific release tag (as above) or a full commit SHA rather than the moving `@v1` tag; see [What a commit SHA pin covers](#known-limitations).
 
 ## Inputs
 
@@ -154,7 +154,7 @@ Add a line to a commit message or PR description:
 ```text
 blockwatch-suppress: docs/cli.md:cli-docs:keep-sorted
 ```
-The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected suppressions are printed in the job log, written to the job summary, exported via [outputs](#outputs), surfaced as GitHub annotations (`::warning` when `suppress_from_commits` or, on a pull request, `suppress_from_description` is `"true"`, or `::notice` when neither source applies), and—when `comment: "true"` and `pull-requests: write` is granted—posted as a sticky comment on the PR page (and removed again if all directives are later cleared).
+The action inspects commits in the push or PR (and the PR body) for lines starting with `blockwatch-suppress:`. Any detected directives are printed in the job log, written to the job summary, exported via [outputs](#outputs), and surfaced as GitHub annotations (`::warning` when `suppress_from_commits` or, on a pull request, `suppress_from_description` is `"true"`, or `::notice` when neither source applies). When `comment: "true"` and `pull-requests: write` is granted, any actually suppressed violations are also listed in a sticky comment on the PR page (linking to the flagged code and commit diff, and removed again once none remain).
 
 The description is read from the API when the run starts, not from the event that triggered it. The two differ after an edit: a re-run replays the original event, so a description-based suppression would otherwise not take effect until the next push. Reading it live means **edit the description, press Re-run, and the violation stops blocking**. The job log names which source was used; without a usable `GITHUB_TOKEN` the action falls back to the event payload.
 

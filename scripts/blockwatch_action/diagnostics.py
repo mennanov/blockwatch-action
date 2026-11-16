@@ -30,6 +30,7 @@ class Violation:
     # Where a suppressed violation's suppression came from ("commits",
     # "description", or "workflow" when neither matched). Empty when active.
     suppression_sources: tuple[str, ...] = ()
+    matched_directives: tuple[SuppressionDirective, ...] = ()
 
     @property
     def single_line(self) -> bool:
@@ -93,27 +94,27 @@ def classify_violations(
     violations: list[Violation],
     directives: list[SuppressionDirective],
 ) -> None:
-    """Tag suppressed violations with their source and count matches per directive."""
+    """Tag suppressed violations with matched directives/sources and count matches."""
     suppressed = [violation for violation in violations if violation.suppressed]
     applied = [directive for directive in directives if directive.applied]
     for directive in applied:
-        directive.matched_violations = sum(
-            1
-            for violation in suppressed
+        directive.matched_violations = 0
+    for violation in suppressed:
+        matches = tuple(
+            directive
+            for directive in applied
             if directive_matches_violation(directive.address, violation)
         )
-    for violation in suppressed:
-        matched = tuple(
+        violation.matched_directives = matches
+        for directive in matches:
+            directive.matched_violations += 1
+        sources = tuple(
             source
             for source in SUPPRESSION_SOURCES
-            if any(
-                directive.source == source
-                and directive_matches_violation(directive.address, violation)
-                for directive in applied
-            )
+            if any(directive.source == source for directive in matches)
         )
-        if matched:
-            violation.suppression_sources = matched
+        if sources:
+            violation.suppression_sources = sources
             violation.level = "warning"
         else:
             violation.suppression_sources = ("workflow",)

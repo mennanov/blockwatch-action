@@ -409,12 +409,16 @@ class ActionTestCase(unittest.TestCase):
         number: int = 1,
         base_ref: str = "main",
         sync_base: bool = True,
+        pr_fields: JsonObject | None = None,
         **inputs: str,
     ) -> Result:
         if sync_base:
             self.git("update-ref", "refs/remotes/origin/%s" % base_ref, self.base_sha)
+        pr_payload: JsonObject = {"number": number, "body": body}
+        if pr_fields:
+            pr_payload.update(pr_fields)
         return self.run_action(
-            event={"pull_request": {"number": number, "body": body}},
+            event={"pull_request": pr_payload},
             event_name="pull_request",
             GITHUB_BASE_REF=base_ref,
             **inputs,
@@ -429,6 +433,7 @@ class ActionTestCase(unittest.TestCase):
         repository: str = "acme/widgets",
         token: str = "token-123",
         sync_base: bool = True,
+        pr_fields: JsonObject | None = None,
         **inputs: str,
     ) -> Result:
         """Execute a pull request run targeting an already-running `FakeGitHubApi`."""
@@ -436,6 +441,7 @@ class ActionTestCase(unittest.TestCase):
             snapshot_body,
             number=number,
             sync_base=sync_base,
+            pr_fields=pr_fields,
             GITHUB_API_URL=api.url,
             GH_TOKEN=token,
             GITHUB_REPOSITORY=repository,
@@ -457,6 +463,7 @@ class ActionTestCase(unittest.TestCase):
         repository: str = "acme/widgets",
         token: str = "token-123",
         sync_base: bool = True,
+        pr_fields: JsonObject | None = None,
         **inputs: str,
     ) -> tuple[Result, FakeGitHubApi]:
         with FakeGitHubApi(
@@ -475,6 +482,7 @@ class ActionTestCase(unittest.TestCase):
                 repository=repository,
                 token=token,
                 sync_base=sync_base,
+                pr_fields=pr_fields,
                 **inputs,
             )
         return result, api

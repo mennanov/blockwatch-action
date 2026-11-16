@@ -5,8 +5,8 @@ from __future__ import annotations
 import socket
 
 from .harness import (
-    SORTED_FRUIT,
     UNSORTED_FRUIT,
+    UNSORTED_VEG,
     ActionTestCase,
     FakeGitHubApi,
     ensure_pinned_blockwatch,
@@ -192,14 +192,15 @@ class PullRequestApiTest(ActionTestCase):
             [{"line": "blockwatch-suppress:", "address": "", "applied": True}],
         )
         self.assertIn("blockwatch-suppress:", result.summary)
-        self.assertEqual(len(api.comments), 1)
-        self.assertRegex(str(api.comments[0]["body"]), r"\|\s*applied\s*\|.*blockwatch-suppress:")
+        self.assertEqual(api.comments, [])
 
     def test_suppression_directive_posts_updates_skips_unchanged_and_deletes_sticky_comment(
         self,
     ) -> None:
-        """Sticky PR comment tracks suppressions across create, skip, update, and delete."""
-        self.break_fruit("suppress in commit\n\nblockwatch-suppress: docs/a.md:fruit\n")
+        """Sticky PR comment posts one table for suppressed violations across create/update/delete."""
+        commit_sha = self.break_fruit(
+            "suppress in commit\n\nblockwatch-suppress: docs/a.md:fruit\n"
+        )
         marker = "<!-- blockwatch-action:suppressions -->"
 
         with FakeGitHubApi(body="") as api:
@@ -216,23 +217,45 @@ class PullRequestApiTest(ActionTestCase):
             first_body = str(api.comments[0]["body"])
             self.assertTrue(first_body.startswith(marker))
             self.assertIn("> [!WARNING]", first_body)
-            self.assertIn("applied (matched 1 violation)", first_body)
+            self.assertNotIn("suppression directive(s)", first_body)
+            self.assertIn("| Location | Message | Source | Suppression directive |", first_body)
             violation = created.diagnostics["docs/a.md"][0]
-            self.assertIn("docs/a.md:%s" % violation["range"]["start"]["line"], first_body)
-            self.assertIn("keep-sorted (commit message)", first_body)
+            line_num = violation["range"]["start"]["line"]
+            self.assertIn(
+                '<a href="https://github.com/acme/widgets/blob/%s/docs/a.md#L%s">'
+                "<code>docs/a.md:%s</code></a>" % (commit_sha, line_num, line_num),
+                first_body,
+            )
+            self.assertIn(violation["message"], first_body)
+            self.assertIn(
+                'commit <a href="https://github.com/acme/widgets/pull/42/commits/%s">'
+                "<code>%s</code></a> (suppress in commit)" % (commit_sha, commit_sha[:7]),
+                first_body,
+            )
+            self.assertIn("<code>blockwatch-suppress: docs/a.md:fruit</code>", first_body)
 
             api.comment_requests.clear()
             unchanged = self.run_against_api(api, number=42)
             self.assertEqual(unchanged.exit_code, 0)
-            self.assertEqual(
-                [req[0] for req in api.comment_requests],
-                ["GET"],
-            )
+            self.assertEqual([req[0] for req in api.comment_requests], ["GET"])
             self.assertEqual(len(api.comments), 1)
 
-            api.body = "blockwatch-suppress: docs/b.md"
+            # Adding a second violation suppressed by PR description updates the comment in place.
+            self.write("docs/b.md", UNSORTED_VEG)
+            head_sha = self.commit("break veg too")
+            api.body = "blockwatch-suppress: docs/b.md\nblockwatch-suppress: docs/a.md"
             api.comment_requests.clear()
-            updated = self.run_against_api(api, number=42)
+            updated = self.run_against_api(
+                api,
+                number=42,
+                pr_fields={
+                    "html_url": "https://github.com/acme/widgets/pull/42",
+                    "head": {
+                        "sha": head_sha,
+                        "repo": {"html_url": "https://github.com/forker/widgets"},
+                    },
+                },
+            )
             self.assertEqual(updated.exit_code, 0)
             self.assertEqual(
                 [req[:2] for req in api.comment_requests],
@@ -242,14 +265,23 @@ class PullRequestApiTest(ActionTestCase):
                 ],
             )
             self.assertEqual(len(api.comments), 1)
-            self.assertIn("blockwatch: 2 suppression directive(s)", str(api.comments[0]["body"]))
-            self.assertIn("pull request description", str(api.comments[0]["body"]))
+            second_body = str(api.comments[0]["body"])
+            self.assertIn("blockwatch: 2 suppressed violation(s)", second_body)
+            self.assertIn(
+                "https://github.com/forker/widgets/blob/%s/docs/b.md#L" % head_sha, second_body
+            )
+            self.assertIn("<br>pull request description", second_body)
+            self.assertIn(
+                "<code>blockwatch-suppress: docs/a.md:fruit</code><br>"
+                "<code>blockwatch-suppress: docs/a.md</code>",
+                second_body,
+            )
+            self.assertIn("<code>blockwatch-suppress: docs/b.md</code>", second_body)
 
-            # Clean PR with no remaining directives deletes the stale sticky comment.
+            # Unused directives (0 suppressed violations) still delete any stale sticky comment.
             self.git("reset", "--hard", self.base_sha)
-            self.write("docs/a.md", SORTED_FRUIT)
             self.commit_notes("clean fix without directives")
-            api.body = ""
+            api.body = "blockwatch-suppress: docs/notes.md"
             api.comment_requests.clear()
             cleared = self.run_against_api(api, number=42)
             self.assertEqual(cleared.exit_code, 0)
@@ -280,7 +312,7 @@ class PullRequestApiTest(ActionTestCase):
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(
-            [(req[0], req[1]) for req in api.comment_requests],
+            [req[:2] for req in api.comment_requests],
             [
                 ("GET", "/repos/acme/widgets/issues/7/comments?per_page=100"),
                 ("GET", "/repos/acme/widgets/issues/7/comments?page=2"),
@@ -290,7 +322,10 @@ class PullRequestApiTest(ActionTestCase):
         self.assertEqual(len(api.comments), 3)
         self.assertIn("Reviewer discussion", str(api.comments[0]["body"]))
         self.assertIn("Quoting", str(api.comments[1]["body"]))
-        self.assertIn("applied (matched 1 violation)", str(api.comments[2]["body"]))
+        self.assertIn(
+            "<code>blockwatch-suppress: docs/a.md:fruit</code>",
+            str(api.comments[2]["body"]),
+        )
 
     def test_sticky_comment_skips_gracefully_without_write_permission_or_when_disabled(
         self,
@@ -319,12 +354,12 @@ class PullRequestApiTest(ActionTestCase):
             self.assertEqual(invalid.exit_code, 1)
             self.assertIn("comment", invalid.stderr)
 
-    def test_sticky_comment_caps_rows_handles_disabled_sources_and_escapes_text(self) -> None:
-        """PR comments escape untrusted HTML/pipes, reflect disabled `[!NOTE]`, and cap rows."""
-        self.write("docs/bad|file.md", UNSORTED_FRUIT)
-        self.commit("pipe | <tag> %0A\n\nblockwatch-suppress: docs/bad|file.md\n")
+    def test_sticky_comment_skips_ignored_directives_escapes_text_and_caps_rows(self) -> None:
+        """Disabled directives post no PR comment; active rows escape untrusted text and cap at 50."""
+        self.write("docs/bad|file (1).md", UNSORTED_FRUIT)
+        self.commit("pipe | <tag> %0A\n\nblockwatch-suppress: docs/bad|file (1).md\n")
 
-        with self.subTest("disabled sources post [!NOTE] with escaped text"):
+        with self.subTest("disabled sources suppress nothing so no PR comment is posted"):
             disabled, api = self.run_pr_api(
                 api_body="blockwatch-suppress: docs/b.md | <xss>",
                 snapshot_body="blockwatch-suppress: docs/b.md | <xss>",
@@ -333,23 +368,31 @@ class PullRequestApiTest(ActionTestCase):
                 INPUT_SUPPRESS_FROM_DESCRIPTION="false",
             )
             self.assertEqual(disabled.exit_code, 1)
+            self.assertEqual(api.comments, [])
+
+        with self.subTest(
+            "untrusted characters in file paths, subjects, and directives escape cleanly"
+        ):
+            escaped, api = self.run_pr_api(api_body="", number=9)
+            self.assertEqual(escaped.exit_code, 0)
             self.assertEqual(len(api.comments), 1)
             comment = str(api.comments[0]["body"])
-            self.assertIn("> [!NOTE]", comment)
-            self.assertIn("ignored (<code>suppress_from_commits</code> is false)", comment)
-            for escaped in ("&lt;tag&gt;", "&lt;xss&gt;", "&#124;"):
-                self.assertIn(escaped, comment)
-            for raw in ("<tag>", "<xss>"):
-                self.assertNotIn(raw, comment)
+            self.assertIn("docs/bad%7Cfile%20%281%29.md#L", comment)
+            self.assertIn("docs/bad&#124;file (1).md:", comment)
+            self.assertIn("&lt;tag&gt;", comment)
+            self.assertIn("&#124;", comment)
+            self.assertNotIn("<tag>", comment)
 
-        with self.subTest("more than 50 directives caps PR comment rows safely"):
-            many = "\n".join("blockwatch-suppress: docs/notes.md" for _ in range(60))
+        with self.subTest("more than 50 suppressed violations caps PR comment rows safely"):
             self.git("reset", "--hard", self.base_sha)
-            self.commit_notes("clean change")
+            for idx in range(55):
+                self.write("docs/item_%02d.md" % idx, UNSORTED_FRUIT)
+            self.commit("many broken files")
+            many = "\n".join("blockwatch-suppress: docs/item_%02d.md" % idx for idx in range(55))
             capped, api = self.run_pr_api(api_body=many, number=12)
             self.assertEqual(capped.exit_code, 0)
             self.assertEqual(len(api.comments), 1)
             comment = str(api.comments[0]["body"])
-            self.assertIn("blockwatch: 60 suppression directive(s)", comment)
-            self.assertIn("_10 further directive(s) not listed._", comment)
+            self.assertIn("blockwatch: 55 suppressed violation(s)", comment)
+            self.assertIn("_5 further violation(s) not listed._", comment)
             self.assertLessEqual(len(comment), 65536)

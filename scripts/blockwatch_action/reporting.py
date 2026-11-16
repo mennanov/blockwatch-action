@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from blockwatch_action.config import RUN_FAILED, SUPPRESSION_SOURCES, JsonObject, env
 from blockwatch_action.diagnostics import Violation
+from blockwatch_action.github_api import PullRequestLinks
 from blockwatch_action.suppressions import SuppressionDirective
 
 # GitHub renders a limited number of annotations per step and drops the rest
@@ -269,7 +270,6 @@ def directives_summary_section(
     directives: list[SuppressionDirective],
     lines_suppress: bool,
     run_failed: bool,
-    row_limit: int = SUMMARY_ROW_LIMIT,
 ) -> str:
     """Build the Markdown section for suppression directives."""
     if lines_suppress:
@@ -288,7 +288,9 @@ def directives_summary_section(
                 "description, but were ignored because these sources are disabled for this run."
             ),
         ]
-    rows = [format_directive_row(directive, run_failed) for directive in directives[:row_limit]]
+    rows = [
+        format_directive_row(directive, run_failed) for directive in directives[:SUMMARY_ROW_LIMIT]
+    ]
     lines = (
         alert
         + [
@@ -368,40 +370,43 @@ def write_summary(
         handle.write("\n\n".join(sections) + "\n")
 
 
-def _format_comment_violation_row(violation: Violation) -> str:
+def _html_link(url: str | None, label_html: str) -> str:
+    if not url:
+        return label_html
+    return '<a href="%s">%s</a>' % (html.escape(url, quote=True), label_html)
+
+
+def _comment_directive_source(directive: SuppressionDirective, links: PullRequestLinks) -> str:
+    if directive.source != "commits":
+        return "pull request description"
+    if directive.commit:
+        commit_ref = _html_link(
+            links.commit_url(directive.commit_sha),
+            _html_code(directive.commit),
+        )
+        subject = escape_html_cell(truncate_text(directive.subject))
+        return "commit %s (%s)" % (commit_ref, subject) if subject else "commit %s" % commit_ref
+    return "commit message"
+
+
+def _format_comment_violation_row(violation: Violation, links: PullRequestLinks) -> str:
+    location_label = _html_code("%s:%s" % (violation.path, violation.start_line))
     location = (
-        _html_code("%s:%s" % (violation.path, violation.start_line)) if violation.path else "—"
-    )
-    validator = "%s (%s)" % (
-        escape_html_cell(violation.code),
-        ", ".join(_source_labels(violation)),
+        _html_link(
+            links.code_url(violation.path, violation.start_line, violation.end_line),
+            location_label,
+        )
+        if violation.path
+        else "—"
     )
     message = _escape_html_multiline(violation.message)
-    address = _html_code(violation.address) if violation.address else "—"
-    return "| %s | %s | %s | %s |" % (location, validator, message, address)
-
-
-def _comment_suppressed_violations_section(violations: list[Violation]) -> str:
-    suppressed = [
-        violation for violation in violations if violation.suppressed and _source_labels(violation)
-    ]
-    if not suppressed:
-        return ""
-    rows = [
-        _format_comment_violation_row(violation) for violation in suppressed[:COMMENT_ROW_LIMIT]
-    ]
-    lines = (
-        [
-            "### blockwatch: %d suppressed violation(s) via commit or PR description"
-            % len(suppressed),
-            "",
-            "| Location | Validator | Message | Suppress address |",
-            "| --- | --- | --- | --- |",
-        ]
-        + rows
-        + _summary_truncation_note(len(suppressed), len(rows), "violation")
+    sources = "<br>".join(
+        _comment_directive_source(directive, links) for directive in violation.matched_directives
     )
-    return "\n".join(lines)
+    directives = "<br>".join(
+        _html_code(directive.line) for directive in violation.matched_directives
+    )
+    return "| %s | %s | %s | %s |" % (location, message, sources or "—", directives or "—")
 
 
 def _truncate_comment_body(body: str, limit: int = COMMENT_CHAR_LIMIT) -> str:
@@ -423,25 +428,36 @@ def _truncate_comment_body(body: str, limit: int = COMMENT_CHAR_LIMIT) -> str:
     return "\n".join(kept) + note
 
 
-def render_pr_comment(
-    violations: list[Violation],
-    directives: list[SuppressionDirective],
-    lines_suppress: bool,
-    run_failed: bool,
-) -> str | None:
-    """Build the sticky PR comment Markdown, or None when no directives exist."""
-    if not directives:
-        return None
-    sections = [
-        COMMENT_MARKER,
-        directives_summary_section(
-            directives, lines_suppress, run_failed, row_limit=COMMENT_ROW_LIMIT
-        ),
+def render_pr_comment(violations: list[Violation], links: PullRequestLinks) -> str | None:
+    """Build the sticky PR comment listing actually suppressed violations, or None when empty."""
+    suppressed = [
+        violation for violation in violations if violation.suppressed and _source_labels(violation)
     ]
-    violations_section = _comment_suppressed_violations_section(violations)
-    if violations_section:
-        sections.append(violations_section)
-    return _truncate_comment_body("\n\n".join(sections) + "\n")
+    if not suppressed:
+        return None
+    rows = [
+        _format_comment_violation_row(violation, links)
+        for violation in suppressed[:COMMENT_ROW_LIMIT]
+    ]
+    lines = (
+        [
+            COMMENT_MARKER,
+            "",
+            "> [!WARNING]",
+            (
+                "> The following violation(s) were suppressed via commit messages "
+                "or the pull request description."
+            ),
+            "",
+            "### blockwatch: %d suppressed violation(s)" % len(suppressed),
+            "",
+            "| Location | Message | Source | Suppression directive |",
+            "| --- | --- | --- | --- |",
+        ]
+        + rows
+        + _summary_truncation_note(len(suppressed), len(rows), "violation")
+    )
+    return _truncate_comment_body("\n".join(lines) + "\n")
 
 
 def bounded_json_array(items: list[JsonObject], limit: int = OUTPUT_JSON_LIMIT) -> str:

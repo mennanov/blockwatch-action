@@ -75,7 +75,7 @@ inputs:
     required: false
     default: 'true'
   comment:
-    description: 'Post or update a sticky pull request comment when commit-message or pull-request-description suppression directives are present ("true", the default). Requires "pull-requests: write" permission; if the token is read-only (such as on a fork pull request) or "false" is set, the comment is skipped without failing the run'
+    description: 'Post or update a sticky pull request comment when violations are suppressed via commit messages or the pull request description ("true", the default). Requires "pull-requests: write" permission; if the token is read-only (such as on a fork pull request) or "false" is set, the comment is skipped without failing the run'
     required: false
     default: 'true'
   diff_pathspec:
