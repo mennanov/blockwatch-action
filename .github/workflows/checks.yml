@@ -33,6 +33,7 @@ jobs:
           verbosity: "none"
           annotations: "false"
           summary: "false"
+          comment: "false"
 
       - name: Set up Python
         uses: actions/setup-python@v7.1.0
@@ -48,6 +49,8 @@ jobs:
   lockfile:
     runs-on: ubuntu-slim
     name: Lockfile
+    permissions:
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:

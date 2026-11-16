@@ -15,6 +15,9 @@ line-length = 100
 # more than it is worth here.
 [tool.pyrefly]
 project-includes = ["scripts"]
+# Both `scripts/run.py` and `python3 -m unittest discover -s scripts` run with
+# `scripts/` on `sys.path`; mirror that import root for type checking.
+search-path = ["scripts"]
 preset = "strict"
 
 [tool.pyrefly.errors]
