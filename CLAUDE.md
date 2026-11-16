@@ -94,7 +94,9 @@ They import nothing from `run.py` — rearranging its internals must not touch t
 builds its own repository with `HOME` and `TMPDIR` redirected into it, so no global git config or
 host temp state reaches in. The suite is grouped in `scripts/tests/` into focused behavioral modules
 (`test_core.py`, `test_suppressions.py`, `test_pr_api.py`), ordered logically from core invariants
-to edge cases; unittest still runs them alphabetically.
+to edge cases; [`scripts/tests/__init__.py`](scripts/tests/__init__.py) discovers and runs them in
+parallel via a `ThreadPoolExecutor`-backed `load_tests` suite (set `UNITTEST_WORKERS=1` to run
+alphabetically sequentially).
 Coverage is deliberately partial: the suite covers the critical invariants (including suppression
 annotations, job summary formatting, and step outputs), not every branch.
 
