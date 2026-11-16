@@ -63,11 +63,11 @@ run annotates the merge commit as well.
 Adding a case that annotates adds a card to every pull request that touches its fixture. Give it a
 fixture of its own.
 
-`scripts/run.py` has black-box tests in [`scripts/run_test.py`](scripts/run_test.py) and is fully
+`scripts/run.py` has black-box tests in [`scripts/tests/`](scripts/tests/) and is fully
 annotated for Pyrefly. Both are fast, and the [pre-commit hooks](#the-pre-commit-hooks) run them:
 
 ```shell
-python3 scripts/run_test.py     # or: python3 -m pytest scripts/run_test.py
+python3 -m unittest discover -s scripts -v
 pyrefly check                   # preset and disabled codes come from pyproject.toml
 ```
 

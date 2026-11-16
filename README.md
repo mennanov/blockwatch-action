@@ -278,5 +278,5 @@ Self-hosted runners require:
 
 ```shell
 act workflow_dispatch -W .github/workflows/local-test.yml
-python3 scripts/run_test.py
+python3 -m unittest discover -s scripts -v
 ```

@@ -38,7 +38,7 @@ repos:
       # files so that the commit bumping that version runs them too.
       - id: run-tests
         name: run.py tests
-        entry: python3 scripts/run_test.py
+        entry: python3 -m unittest discover -s scripts -v
         language: system
         files: ^(scripts/.*\.py|action\.yml)$
         pass_filenames: false
