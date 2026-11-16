@@ -226,15 +226,19 @@ def _escape_html_multiline(value: str) -> str:
     return escaped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
 
 
-def _directive_source_cell(directive: SuppressionDirective) -> str:
+def _directive_source_cell(
+    directive: SuppressionDirective,
+    links: PullRequestLinks | None = None,
+) -> str:
     if directive.source != "commits":
         return "pull request description"
-    if directive.commit:
-        return "commit %s (%s)" % (
-            _html_code(directive.commit),
-            escape_html_cell(truncate_text(directive.subject)),
-        )
-    return "commit message"
+    if not directive.commit:
+        return "commit message"
+    commit_ref = _html_code(directive.commit)
+    if links is not None:
+        commit_ref = _html_link(links.commit_url(directive.commit_sha), commit_ref)
+    subject = escape_html_cell(truncate_text(directive.subject))
+    return "commit %s (%s)" % (commit_ref, subject) if subject else "commit %s" % commit_ref
 
 
 def _directive_status_cell(directive: SuppressionDirective, run_failed: bool) -> str:
@@ -376,19 +380,6 @@ def _html_link(url: str | None, label_html: str) -> str:
     return '<a href="%s">%s</a>' % (html.escape(url, quote=True), label_html)
 
 
-def _comment_directive_source(directive: SuppressionDirective, links: PullRequestLinks) -> str:
-    if directive.source != "commits":
-        return "pull request description"
-    if directive.commit:
-        commit_ref = _html_link(
-            links.commit_url(directive.commit_sha),
-            _html_code(directive.commit),
-        )
-        subject = escape_html_cell(truncate_text(directive.subject))
-        return "commit %s (%s)" % (commit_ref, subject) if subject else "commit %s" % commit_ref
-    return "commit message"
-
-
 def _format_comment_violation_row(violation: Violation, links: PullRequestLinks) -> str:
     location_label = _html_code("%s:%s" % (violation.path, violation.start_line))
     location = (
@@ -401,7 +392,7 @@ def _format_comment_violation_row(violation: Violation, links: PullRequestLinks)
     )
     message = _escape_html_multiline(violation.message)
     sources = "<br>".join(
-        _comment_directive_source(directive, links) for directive in violation.matched_directives
+        _directive_source_cell(directive, links) for directive in violation.matched_directives
     )
     directives = "<br>".join(
         _html_code(directive.line) for directive in violation.matched_directives
@@ -431,7 +422,9 @@ def _truncate_comment_body(body: str, limit: int = COMMENT_CHAR_LIMIT) -> str:
 def render_pr_comment(violations: list[Violation], links: PullRequestLinks) -> str | None:
     """Build the sticky PR comment listing actually suppressed violations, or None when empty."""
     suppressed = [
-        violation for violation in violations if violation.suppressed and _source_labels(violation)
+        violation
+        for violation in violations
+        if violation.suppressed and violation.matched_directives
     ]
     if not suppressed:
         return None

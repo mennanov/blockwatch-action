@@ -144,6 +144,26 @@ def _replay_events(
 class ParallelTestSuite(unittest.TestSuite):
     """TestSuite executing independent TestCases concurrently across worker threads."""
 
+    def _setup_module(
+        self,
+        mod_name: str,
+        active_modules: list[ModuleType],
+        result: unittest.TestResult,
+    ) -> tuple[str, str]:
+        module = sys.modules.get(mod_name)
+        setup = getattr(module, "setUpModule", None) if module is not None else None
+        if not callable(setup) or module is None:
+            return ("ok", "")
+        try:
+            setup()
+        except unittest.SkipTest as exc:
+            return ("skip", str(exc))
+        except Exception:
+            result.addError(_fixture_error("setUpModule (%s)" % mod_name), sys.exc_info())
+            return ("error", "")
+        active_modules.append(module)
+        return ("ok", "")
+
     def _prepare_modules(
         self,
         cases: list[unittest.TestCase],
@@ -158,24 +178,7 @@ class ParallelTestSuite(unittest.TestSuite):
                 break
             mod_name = case.__class__.__module__
             if mod_name not in module_outcomes:
-                module = sys.modules.get(mod_name)
-                setup = getattr(module, "setUpModule", None) if module is not None else None
-                if callable(setup) and module is not None:
-                    try:
-                        setup()
-                    except unittest.SkipTest as exc:
-                        module_outcomes[mod_name] = ("skip", str(exc))
-                    except Exception:
-                        module_outcomes[mod_name] = ("error", "")
-                        result.addError(
-                            _fixture_error("setUpModule (%s)" % mod_name), sys.exc_info()
-                        )
-                    else:
-                        module_outcomes[mod_name] = ("ok", "")
-                        active_modules.append(module)
-                else:
-                    module_outcomes[mod_name] = ("ok", "")
-
+                module_outcomes[mod_name] = self._setup_module(mod_name, active_modules, result)
             status, detail = module_outcomes[mod_name]
             if status == "ok":
                 runnable.append(case)

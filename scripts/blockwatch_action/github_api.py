@@ -34,6 +34,20 @@ def _dict_field(obj: JsonObject, key: str) -> JsonObject:
     return value if isinstance(value, dict) else {}
 
 
+def _repo_web_url(server_url: str, repository: object) -> str:
+    if not server_url or not isinstance(repository, str):
+        return ""
+    slug = repository.strip("/")
+    return "%s/%s" % (server_url, urllib.parse.quote(slug, safe="/")) if slug else ""
+
+
+def _pr_number(pr: JsonObject) -> str:
+    number = pr.get("number")
+    if not number or isinstance(number, bool) or not isinstance(number, (int, str)):
+        return ""
+    return str(number)
+
+
 @dataclass(frozen=True)
 class PullRequestLinks:
     """Resolved GitHub web URLs for linking PR comment locations and commit diffs."""
@@ -70,29 +84,21 @@ class PullRequestLinks:
 def pull_request_links(payload: JsonObject) -> PullRequestLinks:
     """Resolve GitHub web URLs for code lines and commit diffs on a pull request."""
     server_url = _http_url(env("GITHUB_SERVER_URL", "https://github.com"))
-    repository = env("GITHUB_REPOSITORY").strip("/")
-    repo_url = (
-        "%s/%s" % (server_url, urllib.parse.quote(repository, safe="/"))
-        if server_url and repository
-        else ""
-    )
+    repo_url = _repo_web_url(server_url, env("GITHUB_REPOSITORY"))
 
     pr = event_pull_request(payload)
-    number = pr.get("number")
-    has_number = bool(number and isinstance(number, (int, str)) and not isinstance(number, bool))
+    number = _pr_number(pr)
     pr_url = _http_url(pr.get("html_url"))
-    if not pr_url and repo_url and has_number:
+    if not pr_url and repo_url and number:
         pr_url = "%s/pull/%s" % (repo_url, number)
 
     head = _dict_field(pr, "head")
     head_repo = _dict_field(head, "repo")
-    blob_repo_url = _http_url(head_repo.get("html_url"))
-    if not blob_repo_url and server_url and isinstance(head_repo.get("full_name"), str):
-        full_name = str(head_repo["full_name"]).strip("/")
-        if full_name:
-            blob_repo_url = "%s/%s" % (server_url, urllib.parse.quote(full_name, safe="/"))
-    if not blob_repo_url:
-        blob_repo_url = repo_url
+    blob_repo_url = (
+        _http_url(head_repo.get("html_url"))
+        or _repo_web_url(server_url, head_repo.get("full_name"))
+        or repo_url
+    )
 
     raw_sha = str(head.get("sha") or env("GITHUB_SHA")).strip()
     head_sha = raw_sha if _SAFE_SHA.match(raw_sha) else ""
@@ -127,17 +133,10 @@ class PullRequestTarget:
 
 def resolve_pull_request_target(payload: JsonObject) -> tuple[PullRequestTarget | None, str]:
     """Resolve pull request API coordinates, returning an empty target and optional reason otherwise."""
-    pr = event_pull_request(payload)
-    number = pr.get("number")
+    number = _pr_number(event_pull_request(payload))
     repository = env("GITHUB_REPOSITORY")
     token = env("GH_TOKEN")
-    if not (
-        token
-        and repository
-        and number
-        and isinstance(number, (int, str))
-        and not isinstance(number, bool)
-    ):
+    if not (token and repository and number):
         return None, ""
 
     api_url = env("GITHUB_API_URL", "https://api.github.com").rstrip("/")
