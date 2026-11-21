@@ -120,7 +120,10 @@ jobs:
         with:
           config: "${{ runner.temp }}/blockwatch.toml"
           verbosity: "summary"
-          globs: "**/*.md"
+          # Most Markdown files here hold blocks that point at [[block]] entries
+          # of the root blockwatch.toml. This config has none, so those fail with
+          # "target block not found". docs/configuration.md points only at tags.
+          globs: "docs/configuration.md"
 
       - name: Run blockwatch Action (Only Changed)
         uses: $/
