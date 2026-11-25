@@ -40,7 +40,7 @@ The PR description is read from the GitHub API when the run starts, not from the
 
 <!-- <block name="suppress-from-example" same-as="README.md:quick-start" same-as-pattern="uses:\s+mennanov/blockwatch-action@(?P<value>\S+)" line-pattern-forbidden="uses:\s+mennanov/blockwatch-action@v\d+(\s|$)"> -->
 ```yaml
-- uses: mennanov/blockwatch-action@v1.2.1
+- uses: mennanov/blockwatch-action@v1.2.2
   with:
     suppress_from: "ci/known-violations.txt"
 ```
@@ -56,7 +56,7 @@ Where that is too much trust, such as for outside contributors or automated agen
 
 <!-- <block name="disable-commit-pr-suppress" same-as="README.md:quick-start" same-as-pattern="uses:\s+mennanov/blockwatch-action@(?P<value>\S+)" line-pattern-forbidden="uses:\s+mennanov/blockwatch-action@v\d+(\s|$)"> -->
 ```yaml
-- uses: mennanov/blockwatch-action@v1.2.1
+- uses: mennanov/blockwatch-action@v1.2.2
   with:
     suppress_from_commits: "false"
     suppress_from_description: "false"

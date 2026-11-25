@@ -63,7 +63,7 @@ jobs:
   blockwatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: mennanov/blockwatch-action@v1.2.1
+      - uses: mennanov/blockwatch-action@v1.2.2
         with:
           only_blocks: "src/models.rs:latest-model"
 ```
