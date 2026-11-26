@@ -16,7 +16,7 @@ jobs:
   blockwatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: mennanov/blockwatch-action@v1.2.2
+      - uses: mennanov/blockwatch-action@v1.2.3
 ```
 <!-- </block> -->
 
